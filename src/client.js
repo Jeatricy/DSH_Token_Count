@@ -1,0 +1,547 @@
+// Browser code deliberately has no runtime imports. DSH supplies its shared React.
+export const SUMMARY_METHOD = 'dsh-token-cost/summary';
+export const REFRESH_METHOD = 'dsh-token-cost/refresh';
+
+const AMOUNTS = ['usd', 'cny', 'nativeUsd', 'nativeCny'];
+const TOKENS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'];
+const COUNTS = ['requests', 'priced', 'unknown', 'estimated', 'fxMissing'];
+const finite = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const EMPTY_STATE = Object.freeze({ summary: null, loading: false, error: null, connected: false, updatedAt: null });
+
+// rc.5 passes a ConversationTurn object from node.location.turn; older callers
+// may still pass its numeric identity. Never coerce strings or invalid objects.
+export function normalizeTurn(owner) {
+  const turn = record(owner) ? owner.turn : owner;
+  return Number.isSafeInteger(turn) && turn >= 0 ? turn : undefined;
+}
+
+export function popoverPosition(anchor, viewport, preferUp = false) {
+  const margin = 12;
+  const gap = 8;
+  const leftEdge = viewport.left ?? 0;
+  const topEdge = viewport.top ?? 0;
+  const width = Math.max(0, Math.min(384, viewport.width - margin * 2));
+  const above = Math.max(0, anchor.top - topEdge - margin - gap);
+  const below = Math.max(0, topEdge + viewport.height - anchor.bottom - margin - gap);
+  const up = preferUp || above >= Math.min(240, below);
+  return {
+    placement: up ? 'up' : 'down',
+    left: Math.max(leftEdge + margin, Math.min(anchor.left + anchor.width / 2 - width / 2, leftEdge + viewport.width - margin - width)),
+    top: up ? anchor.top - gap : anchor.bottom + gap,
+    width,
+    maxHeight: Math.min(420, viewport.height * 0.6, up ? above : below),
+    transform: up ? 'translateY(-100%)' : 'none',
+  };
+}
+
+export function validateSummary(value, sessionId) {
+  const validTotals = totals => record(totals)
+    && COUNTS.every(key => finite(totals[key]))
+    && [...AMOUNTS, ...TOKENS].every(key => totals[key] === null || finite(totals[key]));
+  if (!record(value) || value.sessionId !== sessionId || !validTotals(value.totals)
+    || !Array.isArray(value.turns) || !Array.isArray(value.records)
+    || value.turns.some(turn => !record(turn) || !finite(turn.turn) || !validTotals(turn.totals))) {
+    throw new Error('费用数据格式不正确，请重试。');
+  }
+  return value;
+}
+
+/** One RPC and one refresh clock per visible Session, shared by every slot instance. */
+export function createSummaryStore(connection, options = {}) {
+  const timers = options.timers ?? globalThis;
+  const now = options.now ?? Date.now;
+  const doc = options.document ?? (typeof document === 'undefined' ? null : document);
+  const visible = () => doc?.visibilityState !== 'hidden';
+  const debounceMs = options.debounceMs ?? 180;
+  const pollMs = options.pollMs ?? 30000;
+  const timeoutMs = options.timeoutMs ?? 20000;
+  const entries = new Map();
+  let generation = connection.generation.getSnapshot();
+  let epoch = 0;
+  let disposed = false;
+
+  function publish(entry, patch) {
+    if (disposed) return;
+    entry.snapshot = { ...entry.snapshot, ...patch };
+    for (const listener of [...entry.listeners]) listener();
+  }
+  function cancel(entry) {
+    if (entry.timer !== null) timers.clearTimeout(entry.timer);
+    entry.timer = null;
+    entry.pendingMethod = null;
+    const request = entry.request;
+    entry.request = null;
+    if (request) {
+      timers.clearTimeout(request.timeout);
+      request.controller.abort();
+    }
+  }
+  function schedule(entry, method = SUMMARY_METHOD, delay = debounceMs) {
+    if (disposed || !entry.listeners.size) return;
+    // Refresh is stronger than a normal read and survives coalescing.
+    if (entry.pendingMethod !== REFRESH_METHOD) entry.pendingMethod = method;
+    if (entry.request || entry.timer !== null) return;
+    entry.timer = timers.setTimeout(() => {
+      entry.timer = null;
+      const pending = entry.pendingMethod;
+      entry.pendingMethod = null;
+      void request(entry, pending ?? SUMMARY_METHOD);
+    }, delay);
+  }
+  async function request(entry, method) {
+    if (disposed || !entry.listeners.size || !generation) {
+      publish(entry, { connected: !!generation, loading: false });
+      return;
+    }
+    const controller = new AbortController();
+    const token = { controller, epoch, timeout: null, timedOut: false };
+    entry.request = token;
+    publish(entry, { loading: true, error: null, connected: true });
+    // A timeout also releases the deduplication gate if a transport ignores abort.
+    const expired = new Promise((_, reject) => {
+      token.timeout = timers.setTimeout(() => {
+        token.timedOut = true;
+        controller.abort();
+        reject(new Error('读取费用超时，请重试。'));
+      }, timeoutMs);
+    });
+    try {
+      const result = await Promise.race([
+        connection.rpc.call('/api', method, { sessionId: entry.sessionId }, controller.signal),
+        expired,
+      ]);
+      if (disposed || entry.request !== token || token.epoch !== epoch) return;
+      if (!result?.ok) throw new Error(result?.error?.message || '服务未能返回费用，请重试。');
+      const summary = validateSummary(result.value, entry.sessionId);
+      publish(entry, { summary, loading: false, error: null, updatedAt: now() });
+    } catch (error) {
+      if (disposed || entry.request !== token || token.epoch !== epoch) return;
+      const message = token.timedOut ? '读取费用超时，请重试。'
+        : typeof error?.message === 'string' ? error.message : '网络连接失败，请重试。';
+      publish(entry, { loading: false, error: message });
+    } finally {
+      timers.clearTimeout(token.timeout);
+      if (entry.request === token) {
+        entry.request = null;
+        if (entry.pendingMethod) schedule(entry, entry.pendingMethod);
+      }
+    }
+  }
+  function getEntry(sessionId) {
+    let entry = entries.get(sessionId);
+    if (entry) return entry;
+    entry = {
+      sessionId, snapshot: { ...EMPTY_STATE, connected: !!generation },
+      listeners: new Set(), request: null, timer: null, poll: null,
+      pendingMethod: null, running: undefined, tails: new Map(), maxSeq: -1,
+    };
+    entries.set(sessionId, entry);
+    return entry;
+  }
+  function prune() {
+    // The cache is memory-only and bounded; no session data enters localStorage.
+    for (const [id, entry] of entries) {
+      if (entries.size <= 12) break;
+      if (!entry.listeners.size) entries.delete(id);
+    }
+  }
+  function subscribe(sessionId, listener) {
+    if (disposed || typeof sessionId !== 'string' || sessionId === '') return () => {};
+    const entry = getEntry(sessionId);
+    entry.listeners.add(listener);
+    if (entry.listeners.size === 1) {
+      schedule(entry);
+      entry.poll = timers.setInterval(() => {
+        if (visible() && !entry.request) schedule(entry);
+      }, pollMs);
+    }
+    return () => {
+      entry.listeners.delete(listener);
+      if (!entry.listeners.size) {
+        cancel(entry);
+        timers.clearInterval(entry.poll);
+        entry.poll = null;
+        entry.snapshot = { ...entry.snapshot, loading: false };
+        prune();
+      }
+    };
+  }
+  function observe(sessionId, running, turn, seq) {
+    if (disposed || !sessionId) return;
+    const entry = getEntry(sessionId);
+    if (typeof running === 'boolean' && entry.running !== running) {
+      const previous = entry.running;
+      entry.running = running;
+      if (previous !== undefined) schedule(entry);
+    }
+    if (finite(turn) && finite(seq)) {
+      const previous = entry.tails.get(turn);
+      const isNewTail = previous === undefined && entry.maxSeq >= 0 && seq > entry.maxSeq;
+      entry.tails.set(turn, seq);
+      entry.maxSeq = Math.max(entry.maxSeq, seq);
+      if ((previous !== undefined && previous !== seq) || isNewTail) schedule(entry);
+    }
+  }
+  const unsubscribeGeneration = connection.generation.subscribe(() => {
+    const next = connection.generation.getSnapshot();
+    if (Object.is(generation, next)) return;
+    generation = next;
+    epoch++;
+    for (const entry of entries.values()) {
+      cancel(entry);
+      // React's effect dependencies may stay unchanged across a reconnect. Retain
+      // its last lifecycle observations so a subsequent turn/end still invalidates.
+      publish(entry, { ...EMPTY_STATE, connected: !!generation });
+      if (generation) schedule(entry);
+    }
+  });
+  const visibilityChanged = () => {
+    if (visible()) for (const entry of entries.values()) schedule(entry);
+  };
+  doc?.addEventListener('visibilitychange', visibilityChanged);
+  return {
+    subscribe,
+    getSnapshot(sessionId) {
+      return typeof sessionId === 'string' && sessionId !== '' ? getEntry(sessionId).snapshot : EMPTY_STATE;
+    },
+    observe,
+    retry(sessionId) { if (sessionId) schedule(getEntry(sessionId), SUMMARY_METHOD, 0); },
+    refresh(sessionId) { if (sessionId) schedule(getEntry(sessionId), REFRESH_METHOD, 0); },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      unsubscribeGeneration();
+      doc?.removeEventListener('visibilitychange', visibilityChanged);
+      for (const entry of entries.values()) {
+        cancel(entry);
+        timers.clearInterval(entry.poll);
+        entry.listeners.clear();
+      }
+      entries.clear();
+    },
+  };
+}
+
+export function formatMoney(value, currency = 'CNY') {
+  const symbol = currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : `${currency} `;
+  if (!finite(value)) return `${symbol}—`;
+  if (value > 0 && value < 0.000001) return `${symbol}<0.000001`;
+  return symbol + value.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: value < 0.01 ? 6 : value < 1000 ? 4 : 2,
+  });
+}
+export function formatCount(value) {
+  return finite(value) ? value.toLocaleString('zh-CN') : '—';
+}
+export function amountText(totals) {
+  const allUnknown = totals?.requests > 0 && totals?.priced === 0;
+  return `${formatMoney(allUnknown ? null : totals?.cny)} · ${formatMoney(allUnknown ? null : totals?.usd, 'USD')}`;
+}
+export function safeSourceUrl(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) ? url.href : null;
+  } catch { return null; }
+}
+function formatRate(value) {
+  return finite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 8 }) : '—';
+}
+function sourceText(value) {
+  return typeof value === 'string' ? value : typeof value?.name === 'string' ? value.name : '未提供';
+}
+function dateText(value) {
+  if (value === null || value === undefined || value === '') return '未提供';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN', { hour12: false });
+}
+const MATCH_LABELS = { exact: '精确匹配', alias: '别名匹配', fuzzy: '近似匹配', override: '自定义价格', none: '未找到价格' };
+
+/** rc.5 exposes no after-usage slot. Keep ownership in turnTail and add only an
+ * owned portal span to that turn's direct end toolbar; never move native nodes. */
+export function attachTurnToolbar(anchor, publish) {
+  const root = anchor?.closest('[data-turn-tail]');
+  const view = anchor?.ownerDocument.defaultView;
+  if (!root || !view?.MutationObserver) return () => {};
+  const owned = new WeakSet();
+  let outlet = null;
+  let disposed = false;
+  let queued = false;
+  function release() {
+    if (!outlet) return;
+    outlet.remove();
+    outlet = null;
+    publish(null);
+  }
+  function reconcile() {
+    if (disposed) return;
+    const toolbar = [...root.children].find(element => element.getAttribute('data-clock') === 'end');
+    const info = toolbar?.lastElementChild;
+    if (!info || info.tagName !== 'SPAN') { release(); return; }
+    const native = [...info.children].filter(element => !owned.has(element));
+    const usage = native.find(element => element.tagName === 'SPAN'
+      && [...element.children].some(child => child.tagName === 'BUTTON' && child.getAttribute('aria-haspopup') === 'dialog'));
+    const clock = native.findLast(element => element.tagName === 'SPAN' && element !== usage && element.children.length === 0);
+    if (!usage && !clock) { release(); return; }
+    if (outlet?.parentElement !== info) {
+      release();
+      outlet = anchor.ownerDocument.createElement('span');
+      outlet.setAttribute('data-dsh-token-cost-portal', '');
+      owned.add(outlet);
+    }
+    const before = usage ? usage.nextSibling : clock ?? null;
+    if (before !== outlet && (outlet.parentElement !== info || outlet.nextSibling !== before)) info.insertBefore(outlet, before);
+    publish(outlet);
+  }
+  const observer = new view.MutationObserver(mutations => {
+    const relevant = mutations.some(mutation => {
+      const element = mutation.target.nodeType === 1 ? mutation.target : mutation.target.parentElement;
+      if (outlet?.contains(mutation.target) || element?.closest('.dsh-tc-root')) return false;
+      return [...mutation.addedNodes, ...mutation.removedNodes].some(node => !owned.has(node));
+    });
+    if (!relevant || queued) return;
+    queued = true;
+    queueMicrotask(() => { queued = false; reconcile(); });
+  });
+  observer.observe(root, { childList: true, subtree: true });
+  reconcile();
+  return () => {
+    disposed = true;
+    observer.disconnect();
+    outlet?.remove();
+    outlet = null;
+  };
+}
+
+/** React owns all visible content; the adapter above owns only its empty span. */
+export function createClientPlugin(React, styles = '', ReactDOM) {
+  const h = React.createElement;
+  function MoneyIcon() {
+    return h('svg', { viewBox: '0 0 20 20', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.35, 'aria-hidden': true },
+      h('circle', { cx: 10, cy: 10, r: 7.4 }), h('path', { d: 'M7 6.5 10 10l3-3.5M6.8 10.3h6.4M6.8 13h6.4M10 10v5' }));
+  }
+  function Chevron() {
+    return h('svg', { className: 'dsh-tc-chevron', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+      h('path', { d: 'M4.5 6.25 8 9.75l3.5-3.5' }));
+  }
+  function Source({ label, url }) {
+    const href = safeSourceUrl(url);
+    return href ? h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, sourceText(label)) : sourceText(label);
+  }
+  function Metrics({ totals }) {
+    const allUnknown = totals?.requests > 0 && totals?.priced === 0;
+    const pairs = [
+      ['美元原币小计', formatMoney(allUnknown ? null : totals?.nativeUsd, 'USD')],
+      ['人民币原币小计', formatMoney(allUnknown ? null : totals?.nativeCny)],
+      ['请求 / 已计价', `${formatCount(totals?.requests)} / ${formatCount(totals?.priced)}`],
+      ['未计价 / 缺汇率', `${formatCount(totals?.unknown)} / ${formatCount(totals?.fxMissing)}`],
+      ['输入 Token', formatCount(totals?.inputTokens)],
+      ['输出 Token', formatCount(totals?.outputTokens)],
+      ['缓存读取 Token', formatCount(totals?.cacheReadTokens)],
+      ['缓存写入 Token', formatCount(totals?.cacheWriteTokens)],
+    ];
+    return h('dl', { className: 'dsh-tc-metrics' }, pairs.map(([label, value]) =>
+      h(React.Fragment, { key: label }, h('dt', null, label), h('dd', null, value))));
+  }
+  function RequestRow({ item }) {
+    const quote = item.quote ?? {};
+    const price = quote.price ?? {};
+    return h('details', { className: 'dsh-tc-request' },
+      h('summary', null, h(Chevron), h('span', null, item.model || '未知模型'),
+        h('span', { className: 'dsh-tc-request-amount' }, quote.status === 'priced' ? formatMoney(quote.native, quote.currency) : '未计价')),
+      h('div', { className: 'dsh-tc-request-body' },
+        h('p', null, `${item.provider || '未知提供商'} · ${dateText(item.time)}`),
+        h('p', null, `折算 ${formatMoney(quote.cny)} · ${formatMoney(quote.usd, 'USD')}`),
+        h('p', null, `定价匹配：${MATCH_LABELS[quote.match] || '未提供'}${quote.matchedModel ? ` · ${quote.matchedModel}` : ''}`),
+        h('p', null, '价格来源：', h(Source, { label: price.source, url: price.sourceUrl })),
+        price.rates && h('p', null, `单价 / 百万 Token：输入 ${formatMoney(price.rates.input, price.currency)} · 输出 ${formatMoney(price.rates.output, price.currency)} · 缓存读取 ${formatMoney(price.rates.cacheRead, price.currency)} · 缓存写入 ${formatMoney(price.rates.cacheWrite, price.currency)}${price.period ? ` · ${price.period}` : ''}`),
+        finite(price.rates?.reasoning) && price.rates.reasoning !== price.rates.output && h('p', null, `推理输出 ${formatMoney(price.rates.reasoning, price.currency)} / 百万 Token（包含在输出 Token 中）`),
+        finite(price.rates?.request) && h('p', null, `每请求：${formatMoney(price.rates.request, price.currency)}`),
+        Array.isArray(price.applied) && price.applied.length > 0 && h('p', null, `适用条件：${price.applied.map(value => typeof value === 'string' ? value : value?.name || value?.label || '条件价格').join('；')}`),
+        quote.fx && h('p', null, `当次汇率：1 USD = ${formatRate(quote.fx.rate)} CNY · ${quote.fx.date || '日期未提供'} · `,
+          h(Source, { label: quote.fx.source, url: quote.fx.attributionUrl || quote.fx.sourceUrl }), quote.fx.stale ? '（缓存）' : ''),
+        h('p', null, `输入 ${formatCount(item.usage?.inputTokens)} / 输出 ${formatCount(item.usage?.outputTokens)} / 缓存读取 ${formatCount(item.usage?.cacheReadTokens)} / 缓存写入 ${formatCount(item.usage?.cacheWriteTokens)} Token`),
+        Array.isArray(quote.warnings) && quote.warnings.length > 0 && h('ul', { className: 'dsh-tc-warnings' }, quote.warnings.map((text, i) => h('li', { key: i }, String(text))))));
+  }
+  function Breakdown({ state, totals, turn, retry, refresh }) {
+    const summary = state.summary;
+    const [limit, setLimit] = React.useState(20);
+    const items = React.useMemo(() => (summary?.records ?? []).filter(item => turn === undefined || item.turn === turn), [summary, turn]);
+    const row = turn === undefined ? null : summary?.turns.find(item => item.turn === turn);
+    const warnings = [...new Set(turn === undefined ? summary?.warnings ?? [] : row?.warnings ?? [])];
+    const sources = React.useMemo(() => {
+      const unique = new Map();
+      for (const item of items) {
+        const price = item.quote?.price;
+        if (price) unique.set(`${sourceText(price.source)}|${price.sourceUrl || ''}`, price);
+      }
+      return [...unique.values()];
+    }, [items]);
+    return h('div', { className: 'dsh-tc-panel' },
+      h('div', { className: 'dsh-tc-heading' }, h('strong', null, turn === undefined ? '会话费用' : `第 ${turn} 轮费用`),
+        h('span', null, amountText(totals))),
+      h('p', { className: 'dsh-tc-note' }, '公开价估算，不等于账户实扣。双币为同一笔费用，请勿相加。'),
+      state.error && h('p', { className: 'dsh-tc-error' }, `费用读取失败：${state.error}`),
+      !totals && h('p', { className: 'dsh-tc-note' }, '本轮暂无用量记录；缺失金额和 Token 显示为 —。'),
+      totals?.unknown > 0 && h('p', { className: 'dsh-tc-warning' }, `${totals.unknown} 次请求未计价，金额仅含已知部分。`),
+      totals?.fxMissing > 0 && h('p', { className: 'dsh-tc-warning' }, `${totals.fxMissing} 次请求缺汇率，折算不完整。`),
+      h(Metrics, { totals }),
+      h('details', { className: 'dsh-tc-section' },
+        h('summary', null, h(Chevron), '来源与计价说明', warnings.length > 0 && h('span', { className: 'dsh-tc-note' }, `${warnings.length} 条提示`)),
+        h('div', { className: 'dsh-tc-sources' },
+          h('p', null, '价格来源：', sources.length ? sources.map((price, i) => h(React.Fragment, { key: i }, i > 0 ? '、' : '', h(Source, { label: price.source, url: price.sourceUrl }))) : sourceText(summary?.pricing?.source)),
+          h('p', null, `价目更新：${dateText(summary?.pricing?.fetchedAt)}${summary?.pricing?.stale ? '（使用缓存）' : ''}`),
+          h('p', null, `参考汇率：${finite(summary?.fx?.rate) ? `1 USD = ${formatRate(summary.fx.rate)} CNY` : '暂不可用'} · ${summary?.fx?.date || '日期未提供'}${summary?.fx?.stale ? '（使用缓存）' : ''}`),
+          h('p', null, '汇率来源：', h(Source, { label: summary?.fx?.source, url: summary?.fx?.attributionUrl || summary?.fx?.sourceUrl })),
+          h('p', { className: 'dsh-tc-note' }, `共 ${formatCount(totals?.estimated)} 次估算请求。原币小计按价目币种累计；渠道实扣币种以账单为准。`),
+          h('p', { className: 'dsh-tc-note' }, '各请求保留当时的价格与汇率快照；更新价目不会改写已计价记录。')),
+        warnings.length > 0 && h('ul', { className: 'dsh-tc-warnings' }, warnings.map((text, i) => h('li', { key: i }, String(text))))),
+      items.length > 0 && h('details', { className: 'dsh-tc-section dsh-tc-records' },
+        h('summary', null, h(Chevron), `请求明细 · ${items.length}`),
+        items.slice(0, limit).map((item, index) => h(RequestRow, { key: item.id ?? index, item })),
+        items.length > limit && h('button', { type: 'button', className: 'dsh-tc-action', onClick: () => setLimit(value => value + 50) }, `显示更多（还有 ${items.length - limit} 条）`)),
+      h('div', { className: 'dsh-tc-footer' },
+        h('button', { type: 'button', className: 'dsh-tc-action', disabled: state.loading || !state.connected, onClick: retry }, state.error ? '重试' : '刷新费用'),
+        h('button', { type: 'button', className: 'dsh-tc-action', disabled: state.loading || !state.connected, onClick: refresh }, '更新价格与汇率'),
+        h('span', { title: state.updatedAt ? dateText(state.updatedAt) : undefined }, state.loading ? '更新中' : state.updatedAt ? '已更新' : '尚未读取')));
+  }
+  function CostChip({ state, totals, turn, retry, refresh }) {
+    const [open, setOpen] = React.useState(false);
+    const [position, setPosition] = React.useState(null);
+    const triggerRef = React.useRef(null);
+    const popoverRef = React.useRef(null);
+    const popoverId = React.useId();
+    const label = turn === undefined ? '会话累计' : '本轮估算';
+    const close = () => {
+      const popover = popoverRef.current;
+      if (popover?.matches(':popover-open')) popover.hidePopover();
+      setOpen(false);
+      triggerRef.current?.focus({ preventScroll: true });
+    };
+    React.useLayoutEffect(() => {
+      if (!open) return;
+      const popover = popoverRef.current;
+      const trigger = triggerRef.current;
+      const doc = trigger.ownerDocument;
+      const view = doc.defaultView;
+      const viewport = view.visualViewport;
+      const positionPanel = event => {
+        if (event?.target === popover) return;
+        const anchor = trigger.getBoundingClientRect();
+        setPosition(popoverPosition(anchor, {
+          width: viewport?.width ?? view.innerWidth,
+          height: viewport?.height ?? view.innerHeight,
+          left: viewport?.offsetLeft ?? 0,
+          top: viewport?.offsetTop ?? 0,
+        }, turn === undefined));
+      };
+      positionPanel();
+      if (!popover.matches(':popover-open')) popover.showPopover();
+      popover.focus({ preventScroll: true });
+      view.addEventListener('resize', positionPanel);
+      doc.addEventListener('scroll', positionPanel, true);
+      viewport?.addEventListener('resize', positionPanel);
+      viewport?.addEventListener('scroll', positionPanel);
+      return () => {
+        view.removeEventListener('resize', positionPanel);
+        doc.removeEventListener('scroll', positionPanel, true);
+        viewport?.removeEventListener('resize', positionPanel);
+        viewport?.removeEventListener('scroll', positionPanel);
+        if (popover.matches(':popover-open')) popover.hidePopover();
+      };
+    }, [open, turn]);
+    const badges = [];
+    if (state.loading) badges.push(state.summary ? '更新中' : '读取中');
+    if (!state.connected) badges.push('连接未就绪');
+    if (state.error) badges.push(state.summary ? '更新失败 · 旧数据' : '读取失败');
+    if (totals?.unknown > 0) badges.push(`${totals.unknown} 次未计价`);
+    if (totals?.fxMissing > 0) badges.push('折算不完整');
+    if (state.summary && (!totals || totals.requests === 0)) badges.push('暂无用量');
+    const escape = event => {
+      if (event.key === 'Escape' && open) {
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }
+    };
+    return h('div', { className: `dsh-tc-root ${turn === undefined ? 'dsh-tc-dock' : 'dsh-tc-turn'}` },
+      h('button', {
+        type: 'button', ref: triggerRef, className: 'dsh-tc-trigger',
+        title: '查看费用、Token 和价格来源', 'aria-haspopup': 'dialog',
+        'aria-expanded': open, 'aria-controls': popoverId,
+        'aria-label': `${label} ${amountText(totals)}${badges.length ? `，${badges.join('，')}` : ''}`,
+        onClick: () => { if (open) close(); else setOpen(true); }, onKeyDown: escape,
+      },
+      h(MoneyIcon), h('span', { className: 'dsh-tc-label' }, `${label} ${amountText(totals)}`),
+      badges.length > 0 && h('span', { className: `dsh-tc-badge${state.error ? ' dsh-tc-error' : ''}` }, badges.join(' · ')),
+      h(Chevron)),
+      h('div', {
+        id: popoverId, ref: popoverRef, popover: 'auto', className: 'dsh-tc-popover',
+        role: 'dialog', tabIndex: -1, 'aria-label': turn === undefined ? '会话费用明细' : `第 ${turn} 轮费用明细`,
+        'data-placement': position?.placement,
+        style: position ? { left: position.left, top: position.top, width: position.width, maxHeight: position.maxHeight, transform: position.transform } : undefined,
+        onKeyDown: escape,
+        onToggle: event => {
+          const expanded = (event.newState ?? event.nativeEvent?.newState) === 'open';
+          setOpen(expanded);
+          if (!expanded && event.currentTarget.contains(event.currentTarget.ownerDocument.activeElement)) {
+            triggerRef.current?.focus({ preventScroll: true });
+          }
+        },
+      }, open && h(Breakdown, { state, totals, turn, retry, refresh })),
+      state.error && turn === undefined && h('div', { className: 'dsh-tc-error-row', role: 'status' },
+        h('span', null, `费用读取失败：${state.error}`),
+        h('button', { type: 'button', className: 'dsh-tc-action', disabled: state.loading || !state.connected, onClick: retry }, '重试')),
+      !state.connected && h('span', { className: 'dsh-tc-note' }, '连接恢复后自动更新'));
+  }
+  function TurnPlacement({ children }) {
+    const anchor = React.useRef(null);
+    const [outlet, setOutlet] = React.useState(null);
+    React.useLayoutEffect(() => {
+      if (!ReactDOM?.createPortal) return;
+      return attachTurnToolbar(anchor.current, setOutlet);
+    }, []);
+    return h(React.Fragment, null,
+      h('span', { ref: anchor, hidden: true, 'data-dsh-token-cost-anchor': '' }),
+      outlet ? ReactDOM.createPortal(children, outlet) : children);
+  }
+  return {
+    inject: ['slots', 'connection'],
+    apply(ctx) {
+      const store = createSummaryStore(ctx.connection);
+      ctx.effect(() => () => store.dispose(), 'token-cost: shared session summaries');
+      function useCost(sessionId, running, turn, seq) {
+        const source = React.useMemo(() => ({
+          subscribe: listener => store.subscribe(sessionId, listener),
+          snapshot: () => store.getSnapshot(sessionId),
+        }), [sessionId]);
+        const state = React.useSyncExternalStore(source.subscribe, source.snapshot, source.snapshot);
+        React.useEffect(() => { store.observe(sessionId, running, turn, seq); }, [sessionId, running, turn, seq]);
+        return state;
+      }
+      function TurnCost({ sessionId, useSession, turn: owner, seq }) {
+        const turn = normalizeTurn(owner);
+        const running = useSession(snapshot => snapshot.running);
+        const state = useCost(turn === undefined ? undefined : sessionId, running, turn, seq);
+        if (!sessionId || turn === undefined) return null;
+        const totals = state.summary?.turns.find(row => row.turn === turn)?.totals;
+        return h(TurnPlacement, { key: `${sessionId}:${turn}` },
+          h(CostChip, { state, totals, turn, retry: () => store.retry(sessionId), refresh: () => store.refresh(sessionId) }));
+      }
+      function SessionCost({ sessionId, useSession }) {
+        const running = useSession(snapshot => snapshot.running);
+        const state = useCost(sessionId, running);
+        if (!sessionId) return null;
+        return h(CostChip, { key: sessionId, state, totals: state.summary?.totals, retry: () => store.retry(sessionId), refresh: () => store.refresh(sessionId) });
+      }
+      function Styles() {
+        return h('style', { 'data-dsh-token-cost-styles': '' }, styles);
+      }
+      ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({ name: 'conversation.chat.turnTail', id: 'token-cost.turn', order: 40 }, TurnCost));
+      ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({ name: 'conversation.composer.dock', id: 'token-cost.session', order: 20 }, SessionCost));
+      ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'token-cost.styles', order: 0 }, Styles));
+    },
+  };
+}

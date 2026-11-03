@@ -1,0 +1,28 @@
+node_modules/
+.reference/
+.cache/
+.publish-check/
+asar-index.json
+inspect-sdk.py
+gui-*.html
+research/
+*.log
+*.tmp
+.env
+.env.*
+*.pem
+*.key
+credentials*
+
+# Publish only synthetic UI previews; local installation/usage reports stay private.
+artifacts/*
+!artifacts/client-*.png
+
+# Keep the current installable release alongside the browser bundle.
+dist/*.tgz
+dist/*.sha256
+!dist/dsh-token-cost-1.0.2.tgz
+!dist/dsh-token-cost-1.0.2.tgz.sha256
+
+# Historical research conversion helper requires unpublished raw captures.
+scripts/seed-prices.mjs

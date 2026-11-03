@@ -1,0 +1,8 @@
+{
+  "rate": 6.6492,
+  "date": "2026-11-03",
+  "fetchedAt": "2026-11-03T04:12:53.205Z",
+  "source": "Frankfurter（每日参考价）",
+  "sourceUrl": "https://api.frankfurter.dev/v2/rates?base=USD&quotes=CNY",
+  "stale": false
+}

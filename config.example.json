@@ -1,0 +1,8 @@
+{
+  "preferDeepSeekOfficial": true,
+  "allowFuzzy": true,
+  "timeoutMs": 10000,
+  "providerSources": {},
+  "aliases": {},
+  "overrides": []
+}

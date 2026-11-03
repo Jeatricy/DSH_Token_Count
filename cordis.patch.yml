@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-token-cost
+      name: dsh-token-cost
+      config: {}

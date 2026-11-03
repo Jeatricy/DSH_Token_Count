@@ -1,0 +1,61 @@
+{
+  "name": "dsh-token-cost",
+  "version": "1.0.2",
+  "description": "DeepSeek Harness 每轮与会话费用统计：模型价格、缓存、峰谷价、人民币/美元双币估算。",
+  "repository": { "type": "git", "url": "https://github.com/Jeatricy/DSH_Token_Count.git" },
+  "homepage": "https://github.com/Jeatricy/DSH_Token_Count#readme",
+  "bugs": { "url": "https://github.com/Jeatricy/DSH_Token_Count/issues" },
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22",
+    "dsh": "0.2.1-rc.5"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./client": "./dist/client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "src/*.js",
+    "dist/client.js",
+    "data/*.json",
+    "docs/*.md",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "config.example.json"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-connection"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.mjs",
+    "sync-prices": "node scripts/sync-prices.mjs",
+    "pack": "node scripts/pack.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "27.4.0",
+    "playwright": "1.58.2",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  }
+}
