@@ -466,12 +466,13 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
         close();
       }
     };
+    const triggerLabel = `${label} ${amountText(totals)}${badges.length ? `，${badges.join('，')}` : ''}`;
     return h('div', { className: `dsh-tc-root ${turn === undefined ? 'dsh-tc-dock' : 'dsh-tc-turn'}` },
       h('button', {
         type: 'button', ref: triggerRef, className: 'dsh-tc-trigger',
-        title: '查看费用、Token 和价格来源', 'aria-haspopup': 'dialog',
+        title: `${triggerLabel}\n查看费用、Token 和价格来源`, 'aria-haspopup': 'dialog',
         'aria-expanded': open, 'aria-controls': popoverId,
-        'aria-label': `${label} ${amountText(totals)}${badges.length ? `，${badges.join('，')}` : ''}`,
+        'aria-label': triggerLabel,
         onClick: () => { if (open) close(); else setOpen(true); }, onKeyDown: escape,
       },
       h(MoneyIcon), h('span', { className: 'dsh-tc-label' }, `${label} ${amountText(totals)}`),

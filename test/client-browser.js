@@ -38,9 +38,9 @@ try {
     await page.route('**/*', route => route.abort());
     await page.setContent(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>
       :root{color-scheme:light dark;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#242934;background:#f9fafb;--dsw-alias-label-primary:#242934;--dsw-alias-label-secondary:#555f70;--dsw-alias-label-tertiary:#6d7788;--dsw-alias-bg-layer-1:#fff;--dsw-alias-border-l2:#e4e7ec;--dsw-alias-state-business-primary:#4264cf;--dsw-alias-interactive-bg-hover:#edf0f5}
-      *{box-sizing:border-box}body{margin:0;padding:24px 20px}main{max-width:680px;margin:auto;height:calc(100vh - 48px);display:flex;flex-direction:column}h1{font-size:18px;font-weight:600;margin:0 0 7px}.fixture-note{color:#7c8698;font-size:11px;margin:0 0 24px}.transcript{flex:1;min-height:0}.reply{font-size:14px;line-height:1.8;margin-bottom:16px;max-width:600px}[data-turn-tail]{display:flex;flex-direction:column;gap:16px}.clip{overflow:hidden;flex:none}.composer{border:1px solid var(--dsw-alias-border-l2);border-radius:16px;min-height:90px;padding:18px;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-1);font-size:13px}.dock{display:flex;justify-content:center;align-items:flex-start;gap:12px;max-width:100%;padding:5px 0 3px}.other-pill{min-width:0;flex:0 1 auto;font-size:11px;color:var(--dsw-alias-label-tertiary);padding-top:6px;white-space:nowrap}
+      *{box-sizing:border-box}body{margin:0;padding:24px 20px}main{max-width:680px;margin:auto;height:calc(100vh - 48px);display:flex;flex-direction:column}h1{font-size:18px;font-weight:600;margin:0 0 7px}.fixture-note{color:#7c8698;font-size:11px;margin:0 0 24px}.transcript{flex:1;min-height:0}.reply{font-size:14px;line-height:1.8;margin-bottom:16px;max-width:600px}[data-turn-tail]{display:flex;flex-direction:column;gap:16px}.clip{overflow:hidden;flex:none}.composer{border:1px solid var(--dsw-alias-border-l2);border-radius:16px;min-height:90px;padding:18px;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-1);font-size:13px}.dock{display:flex;justify-content:center;align-items:center;gap:12px;max-width:100%;padding:5px 0 3px}.other-pill{min-width:0;flex:0 1 auto;font-size:11px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       @media(prefers-color-scheme:dark){:root{background:#1b1d22;color:#e6e9ee;--dsw-alias-label-primary:#e6e9ee;--dsw-alias-label-secondary:#b9c0cd;--dsw-alias-label-tertiary:#939eb0;--dsw-alias-bg-layer-1:#24272e;--dsw-alias-border-l2:#393e49;--dsw-alias-state-business-primary:#98aaff;--dsw-alias-interactive-bg-hover:#2d323c}}@media(max-width:480px){body{padding:18px 12px}main{height:calc(100vh - 36px)}.dock{gap:8px}.other-pill{font-size:10px}.fixture-note{margin-bottom:18px}}
-      </style><main><h1>逐轮费用工具栏</h1><p class="fixture-note">DEMO · 离线组件验证 · 示例数据</p><div class="transcript"><div class="reply">本轮费用已并入用量工具栏。复制、用量与时间保持原有行为；点击费用可查看浮窗明细。</div><div id="tail"></div></div><div class="clip"><div class="composer">输入消息…</div><div class="dock"><span class="other-pill">活动</span><span class="other-pill">用量</span><div id="dock" style="min-width:0;max-width:100%;flex:0 1 auto"></div></div></div><div id="styles"></div></main></html>`);
+      </style><main><h1>逐轮费用工具栏</h1><p class="fixture-note">DEMO · 离线组件验证 · 示例数据</p><div class="transcript"><div class="reply">本轮费用已并入用量工具栏。复制、用量与时间保持原有行为；点击费用可查看浮窗明细。</div><div id="tail"></div></div><div class="clip"><div class="composer">输入消息…</div><div class="dock" data-composer-dock><span class="other-pill">3 轮 2 次请求</span><span class="other-pill">57.9M tok</span><div id="dock" style="min-width:0;max-width:100%;flex:0 1 auto"></div><span class="other-pill" style="flex:none">◯ 53%</span></div></div><div id="styles"></div></main></html>`);
     await page.addStyleTag({ content: sdkToolbar?.css ?? toolbarFixtureCss });
     await page.evaluate(items => {
       window.process = { env: { NODE_ENV: 'development' } };
@@ -54,7 +54,7 @@ try {
       window.__ModuleLoader__ = { load: descriptor => { window.costPlugin = descriptor.factory(window.sharedRequire); } };
     }, sources);
     await page.addScriptTag({ content: bundle });
-    const data = summary('preview', { totals: totals({ usd: 0.1, cny: 0.72, nativeUsd: 0.1 }),
+    const data = summary('preview', { totals: totals({ usd: 110.4841, cny: 735.6028, nativeUsd: 110.4841 }),
       turns: [{ turn: 7, totals: totals({ usd: 0.02, cny: 0.144 }), models: ['example-model'], warnings: [] }] });
     data.records[0].turn = 7;
     await page.evaluate(({ value, turnOwner, factory, sdk }) => {
@@ -139,13 +139,51 @@ try {
     assert.deepEqual(await page.locator('.composer').boundingBox(), before);
     await page.mouse.click(3, 3);
     await page.waitForFunction(() => !document.querySelector('.dsh-tc-dock .dsh-tc-popover').matches(':popover-open'));
+    const dockSizes = [];
+    // Opening/resizing the sidebar changes the composer, not the viewport.
+    for (const composerWidth of width > 480 ? [680, 480, 360, 280, 680] : [351, 280, 351]) {
+      await page.locator('main').evaluate((element, size) => { element.style.maxWidth = `${size}px`; }, composerWidth);
+      const layout = await dockTrigger.evaluate(button => {
+        const label = button.querySelector('.dsh-tc-label');
+        const dock = button.closest('[data-composer-dock]');
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return { viewportWidth: window.innerWidth, composerWidth: dock.clientWidth, dockHeight: dock.getBoundingClientRect().height,
+          triggerHeight: button.getBoundingClientRect().height, labelLines: new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size,
+          truncated: label.scrollWidth > label.clientWidth, overflow: dock.scrollWidth > dock.clientWidth,
+          title: button.title, accessibleName: button.getAttribute('aria-label') };
+      });
+      assert.equal(layout.viewportWidth, width);
+      assert.equal(layout.labelLines, 1, `Session cost wrapped at composer width ${composerWidth}`);
+      assert.ok(layout.triggerHeight <= 29, `Session cost grew to ${layout.triggerHeight}px`);
+      assert.ok(layout.dockHeight <= 37, `Composer dock grew to ${layout.dockHeight}px`);
+      assert.equal(layout.overflow, false);
+      if (composerWidth <= 360) assert.equal(layout.truncated, true);
+      if (composerWidth === 680) assert.equal(layout.truncated, false);
+      if (composerWidth === 280) {
+        const narrowComposer = await page.locator('.composer').boundingBox();
+        await dockTrigger.focus();
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => document.querySelector('.dsh-tc-dock .dsh-tc-popover').matches(':popover-open'));
+        assert.match(await dockPopup.locator('.dsh-tc-heading').innerText(), /¥735\.6028 · \$110\.4841/);
+        assert.deepEqual(await page.locator('.composer').boundingBox(), narrowComposer);
+        const narrowPopup = await dockPopup.boundingBox(), narrowTrigger = await dockTrigger.boundingBox();
+        assert.ok(narrowPopup.y + narrowPopup.height <= narrowTrigger.y);
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => document.activeElement === document.querySelector('.dsh-tc-dock .dsh-tc-trigger'));
+      }
+      if (composerWidth === 360) await page.screenshot({ path: resolve(root, `artifacts/dock-sidebar-narrow-${name}.png`), fullPage: true });
+      dockSizes.push(layout);
+    }
+    assert.match(dockSizes.at(-1).title, /会话累计 ¥735\.6028 · \$110\.4841/);
+    assert.match(dockSizes.at(-1).accessibleName, /会话累计 ¥735\.6028 · \$110\.4841/);
     assert.deepEqual(errors, []);
     evidence.push({ mode: name, viewport: `${width}×${height}`, source: sdkToolbar?.kind ?? 'public toolbar contract fixture', sdkIntegrationSkipped: !sdkToolbar,
       nativeUsageRight: geometry.usage.right, costLeft: geometry.cost.left, costRight: geometry.cost.right, clockLeft: geometry.clock.left,
       usageCenterY: geometry.usage.top + geometry.usage.height / 2, costCenterY: geometry.cost.top + geometry.cost.height / 2,
       order: 'copy → branch → usage → turn cost → time', nativeActionsWorking: true, horizontalOverflow: false,
       lifecycle: name === 'light' ? 'basic/detailed, toolbar replacement, fallback, owned cleanup, native node identity preserved' : 'covered by wide browser and DOM regression',
-      popoverPreserved: true, consoleErrors: errors.length });
+      popoverPreserved: true, dockSizes, consoleErrors: errors.length });
     await page.close();
   }
   const report = { demo: true, browser: executablePath || 'Playwright Chromium', ownerSource: sdkOwner ? 'actual SDK TurnTailNodeView' : 'public owner contract fixture', evidence };

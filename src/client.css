@@ -1,6 +1,10 @@
 .dsh-tc-root{box-sizing:border-box;min-width:0;max-width:100%;font:inherit;font-size:12px;line-height:1.55;color:var(--dsw-alias-label-secondary,#626875);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .dsh-tc-turn{align-self:flex-start;width:100%;margin-block:2px 0}
 .dsh-tc-dock{flex:0 1 auto}
+/* The sidebar shrinks the composer without changing the viewport width. */
+.dsh-tc-dock .dsh-tc-trigger{min-width:0;flex-wrap:nowrap}
+.dsh-tc-dock .dsh-tc-label,.dsh-tc-dock .dsh-tc-badge{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal}
+.dsh-tc-dock .dsh-tc-badge{flex-basis:auto;order:0;padding-inline-start:0}
 [data-dsh-token-cost-anchor]{display:none!important}
 [data-dsh-token-cost-portal]{display:inline-flex;flex:0 1 auto;min-width:0;max-width:100%}
 [data-dsh-token-cost-portal]>.dsh-tc-turn{display:inline-flex;width:auto;align-self:auto;margin:0}
