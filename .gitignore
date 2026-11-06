@@ -21,8 +21,8 @@ artifacts/*
 # Keep the current installable release alongside the browser bundle.
 dist/*.tgz
 dist/*.sha256
-!dist/dsh-token-cost-1.0.2.tgz
-!dist/dsh-token-cost-1.0.2.tgz.sha256
+!dist/dsh-token-cost-1.0.3.tgz
+!dist/dsh-token-cost-1.0.3.tgz.sha256
 
 # Historical research conversion helper requires unpublished raw captures.
 scripts/seed-prices.mjs

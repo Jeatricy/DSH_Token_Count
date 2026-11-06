@@ -118,7 +118,7 @@ test('real React renders formal slots, one stylesheet, shared requests and expan
   assert.equal(document.activeElement, document.querySelector('.dsh-tc-dock .dsh-tc-trigger'));
 });
 
-test('actual rc.5 turn-tail owners select the correct numeric turn and only its request records', async t => {
+test('actual SDK turn-tail owners select the correct numeric turn and only its request records', async t => {
   const owner = await captureSdkTurnOwner(7, 'step', 70);
   if (!owner) { t.skip('Optional local SDK extraction is unavailable'); return; }
   assert.equal(typeof owner.turn, 'object');

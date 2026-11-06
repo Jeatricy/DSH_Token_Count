@@ -1,8 +1,12 @@
 # DSH_Token_Count
 
-DeepSeek Harness **0.2.1-rc.5** 的会话用量与费用插件，安装包名为 `dsh-token-cost`。每轮回复结束后，在原生操作栏的 **“用量”之后、时间之前**显示 `本轮估算 ¥… · $…`；输入框下方显示 `会话累计 ¥… · $…`。点击费用可打开明细浮窗，查看 Token、请求数、模型、原币小计、单价、峰谷时段、汇率日期和来源。支持明暗主题、窄屏和键盘操作。
+DeepSeek Harness **0.2.1-rc.5** 和 **0.2.2-rc.1** 的会话用量与费用插件，安装包名为 `dsh-token-cost`。每轮回复结束后，在原生操作栏的 **“用量”之后、时间之前**显示 `本轮估算 ¥… · $…`；输入框下方显示 `会话累计 ¥… · $…`。点击费用可打开明细浮窗，查看 Token、请求数、模型、原币小计、单价、峰谷时段、汇率日期和来源。支持明暗主题、窄屏和键盘操作。
 
 金额是依据公开价目与已报告用量计算的**估算值**；双币是同一笔费用的两种折算，不能相加。原币指价目使用的币种，不代表代理渠道一定以该币种扣款。插件统计用量，不读取账户余额或套餐剩余额度。
+
+## 1.0.3 更新
+
+- 支持 DeepSeek Harness 0.2.2-rc.1，修复升级后插件因版本声明被拒绝加载的问题。
 
 ## 1.0.2 更新
 
@@ -28,7 +32,7 @@ DeepSeek Harness **0.2.1-rc.5** 的会话用量与费用插件，安装包名为
 https://github.com/Jeatricy/DSH_Token_Count
 ```
 
-也可以[下载 1.0.2 安装包](https://github.com/Jeatricy/DSH_Token_Count/raw/refs/heads/main/dist/dsh-token-cost-1.0.2.tgz)，将下载后文件的绝对路径填入同一安装窗口。
+也可以[下载 1.0.3 安装包](https://github.com/Jeatricy/DSH_Token_Count/raw/refs/heads/main/dist/dsh-token-cost-1.0.3.tgz)，将下载后文件的绝对路径填入同一安装窗口。
 
 安装并启用后刷新 Harness 页面；如管理器提示需要重启，请按提示重启。后续更新代码需重新构建和安装，不能假设修改源文件会自动更新当前 GUI。
 
@@ -129,7 +133,7 @@ DSH 的 `inputTokens` 已排除缓存 Token：
 
 默认 `~/.dsh/token-cost/` 保存公开价格缓存、按日汇率与 `ledger/` 下的独立账本。账本仅存会话 ID、调用序号、时间、模型、Token、金额、价目和汇率，不保存消息正文、提示词或 API Key。对外只请求公开价目和汇率地址，不发送会话数据。
 
-使用 Harness 正式 `session/event`、会话只读持久化、`conversation.chat.turnTail` 和 `conversation.composer.dock` 插槽。rc.5 没有“用量之后”的独立插槽，因此逐轮费用通过限定在本轮操作栏内的 React Portal 适配器显示：只维护插件自己的容器，不移动或替换原生按钮。操作栏不存在或结构不兼容时回退到回复尾部显示。支持版本固定为 rc.5，升级 Harness 后应核对该布局接口。
+使用 Harness 正式 `session/event`、会话只读持久化、`conversation.chat.turnTail` 和 `conversation.composer.dock` 插槽。逐轮费用通过限定在本轮操作栏内的 React Portal 适配器显示，适配器只维护插件自己的容器。操作栏不存在或结构不兼容时回退到回复尾部显示。`engines.dsh` 仅列出已经验证的版本。
 
 HTTP 沿用 Harness 认证及所有者访问控制。文件写入串行化、原子替换；断网或价格接口失败不阻断模型会话。多个进程同时使用同一个自定义账本目录不受支持，请为它们分别配置 `dataDir`。
 

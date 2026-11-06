@@ -1,6 +1,6 @@
 {
   "name": "dsh-token-cost",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "DeepSeek Harness 每轮与会话费用统计：模型价格、缓存、峰谷价、人民币/美元双币估算。",
   "repository": { "type": "git", "url": "https://github.com/Jeatricy/DSH_Token_Count.git" },
   "homepage": "https://github.com/Jeatricy/DSH_Token_Count#readme",
@@ -9,7 +9,7 @@
   "license": "MIT",
   "engines": {
     "node": ">=22",
-    "dsh": "0.2.1-rc.5"
+    "dsh": "0.2.1-rc.5 || 0.2.2-rc.1"
   },
   "exports": {
     ".": "./index.js",

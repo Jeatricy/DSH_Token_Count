@@ -49,7 +49,7 @@ test('registered components use the formal turnTail, composer dock and styleshee
   assert.equal(time.pending(), 0);
 });
 
-test('actual rc.5 Connection SDK sends authenticated transport envelope and validates correlation', async t => {
+test('actual Connection SDK sends authenticated transport envelope and validates correlation', async t => {
   const source = await readSdkSource('dsh-client-connection', 'lib/client.browser.js');
   if (!source) { t.skip('Read-only extracted SDK is not included in published package'); return; }
   let module;

@@ -105,6 +105,10 @@ export function createToolbarComponents(React, ReactDOM, ports = {}, sdk = null)
   const t = (key, values = {}) => ({ copy: '复制', copied: '已复制', 'message.branch': '分支', 'message.turnUsage.title': '原生 Token 用量',
     'message.turnUsage.count': `${values.count ?? ''} tok`, 'message.turnUsage.consumed': `用量 ${values.total ?? ''}` }[key] ?? key);
   const clipboard = text => { ports.copy?.(text); return Promise.resolve(true); };
+  function useClipboardCopy(text) {
+    const [copied, setCopied] = React.useState(false);
+    return { copied, onCopy: () => clipboard(text).then(setCopied) };
+  }
   function useStatDialog() {
     const [open, update] = React.useState(false);
     return { open, setOpen(value) { ports.usage?.(value); update(value); }, rootRef: React.useRef(null), panelRef: React.useRef(null), pos: { position: 'fixed', left: 24, top: 200, zIndex: 1000 } };
@@ -115,7 +119,7 @@ export function createToolbarComponents(React, ReactDOM, ports = {}, sdk = null)
       react_jsx_runtime: { jsx: (type, props, key) => h(type, { ...props, ...(key === undefined ? {} : { key }) }), jsxs: (type, props, key) => { const { children, ...rest } = props; return h(type, { ...rest, ...(key === undefined ? {} : { key }) }, ...children); }, Fragment: React.Fragment },
       MessageIconActions_module_css_default: messageClasses, TurnUsagePanel_module_css_default: usageClasses,
       stat_dialog_module_css_default: sdk.dialogClasses,
-      _deepseek_ai_dsh_client_ui_primitives: { Tooltip: ({ children }) => children, writeClipboard: clipboard, IconCheckOutlineRegular: Icon, IconCopyOutlineRegular: Icon, IconBranchOutlineRegular: Icon, IconDatabaseOutlineRegular: Icon },
+      _deepseek_ai_dsh_client_ui_primitives: { Tooltip: ({ children }) => children, writeClipboard: clipboard, useClipboardCopy, IconCheckOutlineRegular: Icon, IconCopyOutlineRegular: Icon, IconBranchOutlineRegular: Icon, IconDatabaseOutlineRegular: Icon },
       useCalendarDay: () => 0, formatMessageClock: () => '13:48', useStatDialog,
       formatTokens: value => value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : String(value),
       formatExactTokens: value => String(value), formatCacheHitPercent: () => 0, MEASURE_STYLE: {},
@@ -130,9 +134,9 @@ export function createToolbarComponents(React, ReactDOM, ports = {}, sdk = null)
       state.open && ReactDOM.createPortal(h('div', { role: 'dialog', 'aria-label': '原生 Token 用量', className: 'fixture-native-dialog' }, '原生用量明细'), document.body));
   }
   function MessageIconActions({ text, time, clock, onBranch, extraActions, usageAction }) {
-    const [copied, setCopied] = React.useState(false);
+    const { copied, onCopy } = useClipboardCopy(text);
     return h('div', { 'data-clock': clock, className: messageClasses.actions },
-      h('button', { type: 'button', className: messageClasses.action, 'aria-label': copied ? '已复制' : '复制', onClick: () => clipboard(text).then(() => setCopied(true)) }, h(Icon)),
+      h('button', { type: 'button', className: messageClasses.action, 'aria-label': copied ? '已复制' : '复制', onClick: onCopy }, h(Icon)),
       extraActions,
       onBranch && h('button', { type: 'button', className: messageClasses.action, 'aria-label': '分支', onClick: onBranch }, h(Icon)),
       h('span', { className: messageClasses.endInfo }, usageAction, time === undefined ? null : h('span', { className: messageClasses.timeEnd }, '13:48')));
