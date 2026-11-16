@@ -1,8 +1,14 @@
 # DSH_Token_Count
 
-DeepSeek Harness **0.2.1-rc.5** 和 **0.2.2-rc.1** 的会话用量与费用插件，安装包名为 `dsh-token-cost`。每轮回复结束后，在原生操作栏的 **“用量”之后、时间之前**显示 `本轮估算 ¥… · $…`；输入框下方显示 `会话累计 ¥… · $…`。点击费用可打开明细浮窗，查看 Token、请求数、模型、原币小计、单价、峰谷时段、汇率日期和来源。支持明暗主题、窄屏和键盘操作。
+DeepSeek Harness **0.2.1-rc.5**、**0.2.2-rc.1** 和 **0.2.2-rc.3** 的会话用量与费用插件，安装包名为 `dsh-token-cost`。每轮回复结束后，在原生操作栏的 **“用量”之后、时间之前**显示 `本轮估算 ¥… · $…`；输入框下方显示 `会话累计 ¥… · $…`。点击费用可打开明细浮窗，查看 Token、请求数、模型、原币小计、单价、峰谷时段、汇率日期和来源。支持明暗主题、窄屏和键盘操作。
 
 金额是依据公开价目与已报告用量计算的**估算值**；双币是同一笔费用的两种折算，不能相加。原币指价目使用的币种，不代表代理渠道一定以该币种扣款。插件统计用量，不读取账户余额或套餐剩余额度。
+
+## 1.0.4 更新
+
+- 支持 DeepSeek Harness 0.2.2-rc.3，修复升级后插件因 `engines.dsh` 未包含新版本而被拒绝加载的问题。
+- 适配 rc.3 起客户端改为压缩打包（`lib/client.js` 单行、反引号字符串）的变化：契约测试改为按括号与字面量解析，继续执行真实的 `TurnTailNodeView`、`MessageIconActions` 与 `TurnUsagePanel`，同时兼容 rc.5、rc.1 的原有排版。
+- 宿主侧在真实的 0.2.2-rc.3 SDK 上复验：`session/event` 捕获、流式用量回退、fork 继承边界、JSONL 只读回填与账本去重全部通过，未改动会话归档。
 
 ## 1.0.3 更新
 
@@ -32,7 +38,7 @@ DeepSeek Harness **0.2.1-rc.5** 和 **0.2.2-rc.1** 的会话用量与费用插�
 https://github.com/Jeatricy/DSH_Token_Count
 ```
 
-也可以[下载 1.0.3 安装包](https://github.com/Jeatricy/DSH_Token_Count/raw/refs/heads/main/dist/dsh-token-cost-1.0.3.tgz)，将下载后文件的绝对路径填入同一安装窗口。
+也可以[下载 1.0.4 安装包](https://github.com/Jeatricy/DSH_Token_Count/raw/refs/heads/main/dist/dsh-token-cost-1.0.4.tgz)，将下载后文件的绝对路径填入同一安装窗口。
 
 安装并启用后刷新 Harness 页面；如管理器提示需要重启，请按提示重启。后续更新代码需重新构建和安装，不能假设修改源文件会自动更新当前 GUI。
 

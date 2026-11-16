@@ -18,15 +18,112 @@ export function createTurnOwnerFixture(turn = 1, seq = turn * 10) {
     end: { type: 'turn/end', seq, data: { turn } } }, seq };
 }
 
+// 0.2.2-rc.1 ships tab-indented bundles; 0.2.2-rc.3 ships the same modules
+// minified on a few lines with backtick strings and no spaces around `=`.
+// The helpers below therefore read brackets and literals instead of layout.
+function skipLiteral(source, index) {
+  const quote = source[index];
+  let cursor = index + 1;
+  while (cursor < source.length) {
+    const character = source[cursor];
+    if (character === '\\') { cursor += 2; continue; }
+    if (quote === '`' && character === '$' && source[cursor + 1] === '{') {
+      const close = findCloser(source, cursor + 1);
+      if (close < 0) break;
+      cursor = close + 1;
+      continue;
+    }
+    if (character === quote) return cursor + 1;
+    cursor += 1;
+  }
+  throw new Error('The installed SDK contains an unterminated literal; inspect its bundling.');
+}
+
+function findCloser(source, index) {
+  const open = source[index];
+  const close = open === '{' ? '}' : open === '(' ? ')' : open === '[' ? ']' : null;
+  if (close === null) throw new Error(`The installed SDK has an unsupported opener ${JSON.stringify(open)}.`);
+  let depth = 0;
+  for (let cursor = index; cursor < source.length; cursor += 1) {
+    const character = source[cursor];
+    if (character === '"' || character === "'" || character === '`') { cursor = skipLiteral(source, cursor) - 1; continue; }
+    if (character === '/' && source[cursor + 1] === '/') {
+      const end = source.indexOf('\n', cursor + 2);
+      cursor = end < 0 ? source.length : end;
+      continue;
+    }
+    if (character === '/' && source[cursor + 1] === '*') {
+      const end = source.indexOf('*/', cursor + 2);
+      cursor = end < 0 ? source.length : end + 1;
+      continue;
+    }
+    if (character === open) depth += 1;
+    else if (character === close) {
+      depth -= 1;
+      if (depth === 0) return cursor;
+    }
+  }
+  return -1;
+}
+
+function evaluateLiteral(text) {
+  return vm.runInNewContext(`(${text})`);
+}
+
+/** One `function name(...) {...}` declaration, whatever the indentation. */
+function extractFunction(source, name) {
+  const match = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
+  if (!match) throw new Error(`SDK ${name} changed`);
+  const params = source.indexOf('(', match.index);
+  const paramsEnd = findCloser(source, params);
+  if (paramsEnd < 0) throw new Error(`SDK ${name} changed`);
+  const body = source.indexOf('{', paramsEnd);
+  const bodyEnd = body < 0 ? -1 : findCloser(source, body);
+  if (bodyEnd < 0) throw new Error(`SDK ${name} changed`);
+  return source.slice(match.index, bodyEnd + 1);
+}
+
+/** The initializer assigned to `name`, parsed as the value the SDK defines. */
+function initializerOf(source, name) {
+  const match = new RegExp(`(?:const|var|let)\\s+${name}\\s*=\\s*`).exec(source);
+  if (!match) throw new Error(`SDK ${name} changed`);
+  const start = match.index + match[0].length;
+  const character = source[start];
+  const end = character === '{' ? findCloser(source, start) + 1
+    : character === '"' || character === "'" || character === '`' ? skipLiteral(source, start) : -1;
+  if (end < 0) throw new Error(`SDK ${name} changed`);
+  return evaluateLiteral(source.slice(start, end));
+}
+
+/** The CSS string declared immediately before one module's exported class map. */
+function moduleCssOf(source, className) {
+  const marker = new RegExp(`(?:const|var|let)\\s+${className}\\s*=\\s*`).exec(source);
+  if (!marker) throw new Error(`SDK ${className} changed`);
+  const declarations = /(?:const|var|let)\s+css\$?\d*\s*=\s*/g;
+  let last = null;
+  for (const match of source.matchAll(declarations)) {
+    if (match.index > marker.index) break;
+    last = match;
+  }
+  if (!last) throw new Error(`SDK CSS for ${className} changed`);
+  const start = last.index + last[0].length;
+  const character = source[start];
+  if (character !== '"' && character !== "'" && character !== '`') throw new Error(`SDK CSS for ${className} changed`);
+  return evaluateLiteral(source.slice(start, skipLiteral(source, start)));
+}
+
 /** Optional: execute the installed SDK resolver and TurnTailNodeView. */
 export async function captureSdkTurnOwner(turn = 1, kind = 'turn', seq = turn * 10) {
   const [chat, conversation] = await Promise.all([
     readSdkSource('dsh-client-ui-chat'), readSdkSource('dsh-client-ui-conversation'),
   ]);
   if (!chat || !conversation) return null;
-  const resolver = conversation.match(/\n\t\t\tresolve\(seq\) \{([\s\S]*?)\n\t\t\t\}/);
-  if (!resolver) throw new Error('The installed SDK location resolver changed; inspect its owner contract.');
-  const resolveLocation = vm.runInNewContext(`({ resolve(seq) {${resolver[1]}\n} }).resolve`, {
+  // The definition, not the `this.resolve(seq)` call sites; rc.3 minifies away the space.
+  const method = /(?<![.\w$])resolve\(seq\)\s*\{/.exec(conversation);
+  const methodBody = method ? method.index + method[0].length - 1 : -1;
+  const methodEnd = methodBody < 0 ? -1 : findCloser(conversation, methodBody);
+  if (methodEnd < 0) throw new Error('The installed SDK location resolver changed; inspect its owner contract.');
+  const resolveLocation = vm.runInNewContext(`({ resolve(seq) ${conversation.slice(methodBody, methodEnd + 1)} }).resolve`, {
     SESSION_LOCATION: { kind: 'session' }, UNRESOLVED_LOCATION: { kind: 'unresolved' },
   });
   const step = { turn, step: 1, status: 'closed', data: {} };
@@ -36,10 +133,7 @@ export async function captureSdkTurnOwner(turn = 1, kind = 'turn', seq = turn * 
     timeline: { turns: new Map([[turn, sdkTurn]]) },
     stepsByTurn: new Map([[turn, new Map([[1, step]])]]),
   }, seq);
-  const start = chat.indexOf('const TurnTailNodeView = ');
-  const end = chat.indexOf('\n\t\t//#endregion', start);
-  if (start < 0 || end < 0) throw new Error('The installed SDK TurnTailNodeView changed; inspect its owner contract.');
-  const component = vm.runInNewContext(`(() => { ${chat.slice(start, end)}; return TurnTailNodeView; })()`, {
+  const component = vm.runInNewContext(`(() => { ${extractFunction(chat, 'TurnTailNodeView')}\nreturn TurnTailNodeView; })()`, {
     react: { memo: component => component },
     react_jsx_runtime: { jsx: (type, props) => ({ type, props }) },
     TurnTailNodeView_module_css_default: { root: 'sdk-turn-tail' },
@@ -62,34 +156,17 @@ export async function captureSdkTurnOwner(turn = 1, kind = 'turn', seq = turn * 
 export async function readSdkToolbar() {
   const source = await readSdkSource('dsh-client-ui-chat');
   if (!source) return null;
-  const extract = name => {
-    const start = source.indexOf(`function ${name}(`);
-    const end = source.indexOf('\n\t\t}', start);
-    if (start < 0 || end < 0) throw new Error(`SDK ${name} changed`);
-    return source.slice(start, end + 4);
-  };
-  const classes = name => {
-    const marker = `var ${name} = `;
-    const start = source.indexOf(marker) + marker.length;
-    const end = source.indexOf('\n\t\t};', start) + 4;
-    if (start < marker.length || end < 4) throw new Error(`SDK ${name} changed`);
-    return JSON.parse(source.slice(start, end));
-  };
-  const css = name => {
-    const end = source.indexOf(`var ${name} = `);
-    const start = source.lastIndexOf('const css', end);
-    const match = source.slice(start, end).match(/const css(?:\$\d+)? = ("(?:\\.|[^"\\])*");/);
-    if (!match) throw new Error(`SDK CSS for ${name} changed`);
-    return JSON.parse(match[1]);
-  };
   return {
     kind: 'actual SDK MessageIconActions + TurnUsagePanel',
-    messageSource: extract('MessageIconActions'),
-    usageSource: [extract('formatCompactCount'), extract('formatExactCount'), extract('TurnUsagePanel')].join('\n'),
-    messageClasses: classes('MessageIconActions_module_css_default'),
-    usageClasses: classes('TurnUsagePanel_module_css_default'),
-    dialogClasses: classes('stat_dialog_module_css_default'),
-    css: css('MessageIconActions_module_css_default') + css('TurnUsagePanel_module_css_default') + css('stat_dialog_module_css_default'),
+    messageSource: extractFunction(source, 'MessageIconActions'),
+    usageSource: ['formatCompactCount', 'formatExactCount', 'TurnUsagePanel']
+      .map(name => extractFunction(source, name)).join('\n'),
+    messageClasses: initializerOf(source, 'MessageIconActions_module_css_default'),
+    usageClasses: initializerOf(source, 'TurnUsagePanel_module_css_default'),
+    dialogClasses: initializerOf(source, 'stat_dialog_module_css_default'),
+    css: moduleCssOf(source, 'MessageIconActions_module_css_default')
+      + moduleCssOf(source, 'TurnUsagePanel_module_css_default')
+      + moduleCssOf(source, 'stat_dialog_module_css_default'),
   };
 }
 
