@@ -1,8 +1,12 @@
 # DSH_Token_Count
 
-DeepSeek Harness **0.2.1-rc.5**、**0.2.2-rc.1** 和 **0.2.2-rc.3** 的会话用量与费用插件，安装包名为 `dsh-token-cost`。每轮回复结束后，在原生操作栏的 **“用量”之后、时间之前**显示 `本轮估算 ¥… · $…`。主会话输入框下方同时显示 **总消耗（含子智能体）** 和 **本会话消耗**，两项均显示双币费用与已报告的 Token。点击任一项可查看对应的请求、Token、模型、原币小计、单价、峰谷时段、汇率日期和来源。支持明暗主题、窄屏和键盘操作。
+DeepSeek Harness **0.2.1-rc.5**、**0.2.2-rc.1** 和 **0.2.2-rc.3** 的会话用量与费用插件，安装包名为 `dsh-token-cost`。每轮回复结束后，在原生操作栏的 **“用量”之后、时间之前**显示 `本轮估算 ¥… · $…`。主会话输入框下方单行显示 **总消耗（含子智能体）**，双币费用与以 M 为单位的 Token 均保留两位小数。展开后可分别查看本对话和子智能体的完整金额、Token 数量和请求明细。支持明暗主题、窄屏和键盘操作。
 
 金额是依据公开价目与已报告用量计算的**估算值**；双币是同一笔费用的两种折算，不能相加。原币指价目使用的币种，不代表代理渠道一定以该币种扣款。插件统计用量，不读取账户余额或套餐剩余额度。
+
+## 1.1.1 更新
+
+- 输入框下方显示一行合计，展开后显示总计、本对话和子智能体的完整金额与 Token 数量。两项小计各自可展开查看请求和用量明细。
 
 ## 1.1.0 更新
 
@@ -43,7 +47,7 @@ DeepSeek Harness **0.2.1-rc.5**、**0.2.2-rc.1** 和 **0.2.2-rc.3** 的会话用
 https://github.com/Jeatricy/DSH_Token_Count
 ```
 
-本地安装时，在同一窗口填入已下载安装包的绝对路径。[下载 1.1.0 安装包](https://github.com/Jeatricy/DSH_Token_Count/releases/download/v1.1.0/dsh-token-cost-1.1.0.tgz) · [SHA-256 校验文件](https://github.com/Jeatricy/DSH_Token_Count/releases/download/v1.1.0/dsh-token-cost-1.1.0.tgz.sha256)
+本地安装时，在同一窗口填入已下载安装包的绝对路径。[下载 1.1.1 安装包](https://github.com/Jeatricy/DSH_Token_Count/releases/download/v1.1.1/dsh-token-cost-1.1.1.tgz) · [SHA-256 校验文件](https://github.com/Jeatricy/DSH_Token_Count/releases/download/v1.1.1/dsh-token-cost-1.1.1.tgz.sha256)
 
 安装并启用后刷新 Harness 页面；如管理器提示需要重启，请按提示重启。后续更新代码需重新构建和安装，不能假设修改源文件会自动更新当前 GUI。
 

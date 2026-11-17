@@ -140,6 +140,11 @@ test('combined totals count live and archived descendants once and leave own tur
   assert.equal(first.includingSubagents.totals.outputTokens, 37);
   assert.equal(first.includingSubagents.totals.cacheReadTokens, 50);
   assert.ok(Math.abs(first.includingSubagents.totals.usd - 0.000622) < 1e-12);
+  const subagents = first.includingSubagents.subagentTotals;
+  assert.equal(subagents.requests, 4);
+  assert.equal(subagents.inputTokens, 58);
+  assert.equal(subagents.outputTokens, 12);
+  assert.ok(Math.abs(subagents.usd - 0.000212) < 1e-12);
   assert.equal(first.includingSubagents.subagentRecords.length, 4);
   ctx.live.delete('root');
   assert.deepEqual((await host.summary('root')).includingSubagents, first.includingSubagents);
@@ -160,6 +165,8 @@ test('combined refresh includes child receipts and marks unavailable child usage
   ctx.live.delete('child');
   const before = await host.summary('root');
   assert.equal(before.includingSubagents.totals.unknown, 2);
+  assert.equal(before.includingSubagents.subagentTotals.unknown, 1);
+  assert.equal(before.includingSubagents.subagentTotals.usd, null);
   assert.equal(before.includingSubagents.incomplete, true);
   assert.match(before.includingSubagents.warnings.join(' '), /子智能体的会话.*暂不可读/);
   assert.match(before.includingSubagents.warnings.join(' '), /外部子智能体/);
@@ -168,6 +175,7 @@ test('combined refresh includes child receipts and marks unavailable child usage
   const after = await host.refresh('root');
   assert.equal(after.totals.priced, 1);
   assert.equal(after.includingSubagents.totals.priced, 2);
+  assert.equal(after.includingSubagents.subagentTotals.priced, 1);
   assert.equal((await host.ledger.summary('unrelated')).totals.unknown, 1);
 });
 

@@ -54,9 +54,17 @@ try {
       window.__ModuleLoader__ = { load: descriptor => { window.costPlugin = descriptor.factory(window.sharedRequire); } };
     }, sources);
     await page.addScriptTag({ content: bundle });
-    const data = summary('preview', { totals: totals({ usd: 110.4841, cny: 735.6028, nativeUsd: 110.4841 }),
+    const data = summary('preview', { totals: totals({ usd: 110.4841, cny: 735.6028, nativeUsd: 110.4841,
+      inputTokens: 41_024_867 }),
       turns: [{ turn: 7, totals: totals({ usd: 0.02, cny: 0.144 }), models: ['example-model'], warnings: [] }] });
     data.records[0].turn = 7;
+    data.includingSubagents = {
+      totals: totals({ usd: 275.5428, cny: 1836.18795, nativeUsd: 275.5428,
+        inputTokens: 132_679_682, outputTokens: 400, cacheReadTokens: 600, requests: 2, priced: 2, estimated: 2 }),
+      subagentTotals: totals({ usd: 165.0587, cny: 1100.58515, nativeUsd: 165.0587, inputTokens: 91_654_815 }),
+      subagentRecords: [{ ...data.records[0], id: 'child-1', model: 'child-model' }],
+      incomplete: false, warnings: [],
+    };
     await page.evaluate(({ value, turnOwner, factory, sdk }) => {
       const React = window.sharedRequire('react'), ReactDOM = window.sharedRequire('react-dom');
       const { createRoot } = window.sharedRequire('react-dom/client');
@@ -131,12 +139,30 @@ try {
     }
     await page.screenshot({ path: resolve(root, `artifacts/client-toolbar-${name}.png`), fullPage: true });
     const dockTrigger = page.locator('.dsh-tc-dock .dsh-tc-trigger'), dockPopup = page.locator('.dsh-tc-dock .dsh-tc-popover');
+    const dockLabel = '总消耗（含子智能体） ¥1,836.19 · $275.54 · 132.68M Token';
+    assert.equal(await dockTrigger.count(), 1);
+    assert.equal(await dockTrigger.locator('.dsh-tc-label').textContent(), dockLabel);
     const before = await page.locator('.composer').boundingBox();
     await dockTrigger.click();
     await page.waitForFunction(() => document.querySelector('.dsh-tc-dock .dsh-tc-popover').matches(':popover-open'));
     const popup = await dockPopup.boundingBox(), trigger = await dockTrigger.boundingBox();
     assert.ok(popup.y + popup.height <= trigger.y);
     assert.deepEqual(await page.locator('.composer').boundingBox(), before);
+    const scopes = dockPopup.locator('.dsh-tc-scope');
+    assert.deepEqual(await scopes.locator('summary > strong').allTextContents(), ['本对话消耗', '子智能体消耗']);
+    assert.match(await scopes.nth(0).locator('summary').first().innerText(), /¥735\.6028 · \$110\.4841/);
+    assert.match(await scopes.nth(1).locator('summary').first().innerText(), /¥1,100\.58515 · \$165\.0587/);
+    assert.equal(await dockPopup.evaluate(panel => panel.scrollWidth > panel.clientWidth), false);
+    if (name === 'light') {
+      await page.screenshot({ path: resolve(root, 'artifacts/session-usage-open.png'), fullPage: true });
+      for (const scope of await scopes.all()) {
+        const heading = scope.locator(':scope > summary');
+        await heading.click();
+        assert.equal(await scope.locator('.dsh-tc-request').isVisible(), true);
+        await heading.click();
+        assert.equal(await scope.locator('.dsh-tc-request').isVisible(), false);
+      }
+    }
     await page.mouse.click(3, 3);
     await page.waitForFunction(() => !document.querySelector('.dsh-tc-dock .dsh-tc-popover').matches(':popover-open'));
     const dockSizes = [];
@@ -165,7 +191,7 @@ try {
         await dockTrigger.focus();
         await page.keyboard.press('Enter');
         await page.waitForFunction(() => document.querySelector('.dsh-tc-dock .dsh-tc-popover').matches(':popover-open'));
-        assert.match(await dockPopup.locator('.dsh-tc-heading').innerText(), /¥735\.6028 · \$110\.4841/);
+        assert.match(await dockPopup.locator('.dsh-tc-heading').innerText(), /¥1,836\.18795 · \$275\.5428/);
         assert.deepEqual(await page.locator('.composer').boundingBox(), narrowComposer);
         const narrowPopup = await dockPopup.boundingBox(), narrowTrigger = await dockTrigger.boundingBox();
         assert.ok(narrowPopup.y + narrowPopup.height <= narrowTrigger.y);
@@ -175,8 +201,8 @@ try {
       if (composerWidth === 360) await page.screenshot({ path: resolve(root, `artifacts/dock-sidebar-narrow-${name}.png`), fullPage: true });
       dockSizes.push(layout);
     }
-    assert.match(dockSizes.at(-1).title, /会话累计 ¥735\.6028 · \$110\.4841/);
-    assert.match(dockSizes.at(-1).accessibleName, /会话累计 ¥735\.6028 · \$110\.4841/);
+    assert.ok(dockSizes.at(-1).title.startsWith(dockLabel));
+    assert.equal(dockSizes.at(-1).accessibleName, dockLabel);
     assert.deepEqual(errors, []);
     evidence.push({ mode: name, viewport: `${width}×${height}`, source: sdkToolbar?.kind ?? 'public toolbar contract fixture', sdkIntegrationSkipped: !sdkToolbar,
       nativeUsageRight: geometry.usage.right, costLeft: geometry.cost.left, costRight: geometry.cost.right, clockLeft: geometry.clock.left,

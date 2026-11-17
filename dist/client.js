@@ -9,6 +9,7 @@ const REFRESH_METHOD = 'dsh-token-cost/refresh';
 const AMOUNTS = ['usd', 'cny', 'nativeUsd', 'nativeCny'];
 const TOKENS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'];
 const COUNTS = ['requests', 'priced', 'unknown', 'estimated', 'fxMissing'];
+const TWO_DECIMALS = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
 const finite = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const EMPTY_STATE = Object.freeze({ summary: null, loading: false, error: null, connected: false, updatedAt: null });
@@ -48,6 +49,7 @@ function validateSummary(value, sessionId) {
     || !Array.isArray(value.turns) || !Array.isArray(value.records)
     || value.turns.some(turn => !record(turn) || !finite(turn.turn) || !validTotals(turn.totals))
     || (combined !== undefined && (!record(combined) || !validTotals(combined.totals)
+      || (combined.subagentTotals !== undefined && !validTotals(combined.subagentTotals))
       || !Array.isArray(combined.subagentRecords) || !Array.isArray(combined.warnings) || typeof combined.incomplete !== 'boolean'))) {
     throw new Error('费用数据格式不正确，请重试。');
   }
@@ -230,9 +232,15 @@ function createSummaryStore(connection, options = {}) {
   };
 }
 
-function formatMoney(value, currency = 'CNY') {
+function formatMoney(value, currency = 'CNY', display) {
   const symbol = currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : `${currency} `;
   if (!finite(value)) return `${symbol}—`;
+  if (display === 'compact') return symbol + value.toLocaleString('zh-CN', TWO_DECIMALS);
+  if (display === 'detail') {
+    // Very small amounts can need more than 20 fractional digits.
+    if (value > 0 && value < 0.0001) return symbol + String(value);
+    return symbol + value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 20 });
+  }
   if (value > 0 && value < 0.000001) return `${symbol}<0.000001`;
   return symbol + value.toLocaleString('zh-CN', {
     minimumFractionDigits: 2,
@@ -242,9 +250,9 @@ function formatMoney(value, currency = 'CNY') {
 function formatCount(value) {
   return finite(value) ? value.toLocaleString('zh-CN') : '—';
 }
-function amountText(totals) {
+function amountText(totals, display) {
   const allUnknown = totals?.requests > 0 && totals?.priced === 0;
-  return `${formatMoney(allUnknown ? null : totals?.cny)} · ${formatMoney(allUnknown ? null : totals?.usd, 'USD')}`;
+  return `${formatMoney(allUnknown ? null : totals?.cny, 'CNY', display)} · ${formatMoney(allUnknown ? null : totals?.usd, 'USD', display)}`;
 }
 function reportedTokens(totals) {
   if (!totals?.requests) return null;
@@ -342,11 +350,11 @@ function createClientPlugin(React, styles = '', ReactDOM) {
     const href = safeSourceUrl(url);
     return href ? h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, sourceText(label)) : sourceText(label);
   }
-  function Metrics({ totals }) {
+  function Metrics({ totals, display }) {
     const allUnknown = totals?.requests > 0 && totals?.priced === 0;
     const pairs = [
-      ['美元原币小计', formatMoney(allUnknown ? null : totals?.nativeUsd, 'USD')],
-      ['人民币原币小计', formatMoney(allUnknown ? null : totals?.nativeCny)],
+      ['美元原币小计', formatMoney(allUnknown ? null : totals?.nativeUsd, 'USD', display)],
+      ['人民币原币小计', formatMoney(allUnknown ? null : totals?.nativeCny, 'CNY', display)],
       ['请求 / 已计价', `${formatCount(totals?.requests)} / ${formatCount(totals?.priced)}`],
       ['未计价 / 缺汇率', `${formatCount(totals?.unknown)} / ${formatCount(totals?.fxMissing)}`],
       ['输入 Token', formatCount(totals?.inputTokens)],
@@ -357,15 +365,15 @@ function createClientPlugin(React, styles = '', ReactDOM) {
     return h('dl', { className: 'dsh-tc-metrics' }, pairs.map(([label, value]) =>
       h(React.Fragment, { key: label }, h('dt', null, label), h('dd', null, value))));
   }
-  function RequestRow({ item }) {
+  function RequestRow({ item, display }) {
     const quote = item.quote ?? {};
     const price = quote.price ?? {};
     return h('details', { className: 'dsh-tc-request' },
-      h('summary', null, h(Chevron), h('span', null, item.subagent ? `子智能体 · ${item.model || '未知模型'}` : item.model || '未知模型'),
-        h('span', { className: 'dsh-tc-request-amount' }, quote.status === 'priced' ? formatMoney(quote.native, quote.currency) : '未计价')),
+      h('summary', null, h(Chevron), h('span', null, item.model || '未知模型'),
+        h('span', { className: 'dsh-tc-request-amount' }, quote.status === 'priced' ? formatMoney(quote.native, quote.currency, display) : '未计价')),
       h('div', { className: 'dsh-tc-request-body' },
         h('p', null, `${item.provider || '未知提供商'} · ${dateText(item.time)}`),
-        h('p', null, `折算 ${formatMoney(quote.cny)} · ${formatMoney(quote.usd, 'USD')}`),
+        h('p', null, `折算 ${formatMoney(quote.cny, 'CNY', display)} · ${formatMoney(quote.usd, 'USD', display)}`),
         h('p', null, `定价匹配：${MATCH_LABELS[quote.match] || '未提供'}${quote.matchedModel ? ` · ${quote.matchedModel}` : ''}`),
         h('p', null, '价格来源：', h(Source, { label: price.source, url: price.sourceUrl })),
         price.rates && h('p', null, `单价 / 百万 Token：输入 ${formatMoney(price.rates.input, price.currency)} · 输出 ${formatMoney(price.rates.output, price.currency)} · 缓存读取 ${formatMoney(price.rates.cacheRead, price.currency)} · 缓存写入 ${formatMoney(price.rates.cacheWrite, price.currency)}${price.period ? ` · ${price.period}` : ''}`),
@@ -377,35 +385,56 @@ function createClientPlugin(React, styles = '', ReactDOM) {
         h('p', null, `输入 ${formatCount(item.usage?.inputTokens)} / 输出 ${formatCount(item.usage?.outputTokens)} / 缓存读取 ${formatCount(item.usage?.cacheReadTokens)} / 缓存写入 ${formatCount(item.usage?.cacheWriteTokens)} Token`),
         Array.isArray(quote.warnings) && quote.warnings.length > 0 && h('ul', { className: 'dsh-tc-warnings' }, quote.warnings.map((text, i) => h('li', { key: i }, String(text))))));
   }
+  function RequestRows({ items, display }) {
+    const [limit, setLimit] = React.useState(20);
+    return h(React.Fragment, null,
+      items.slice(0, limit).map((item, index) => h(RequestRow, { key: item.id ?? index, item, display })),
+      items.length > limit && h('button', { type: 'button', className: 'dsh-tc-action', onClick: () => setLimit(value => value + 50) }, `显示更多（还有 ${items.length - limit} 条）`));
+  }
+  function UsageAmounts({ totals }) {
+    return h('span', { className: 'dsh-tc-usage-amounts' },
+      h('span', null, amountText(totals, 'detail')),
+      h('span', { className: 'dsh-tc-note' }, totals?.requests === 0 ? '暂无用量' : `${formatCount(reportedTokens(totals))} Token`));
+  }
+  function UsageScope({ title, totals, items }) {
+    return h('details', { className: 'dsh-tc-section dsh-tc-scope' },
+      h('summary', null, h(Chevron), h('strong', null, title), h(UsageAmounts, { totals })),
+      h(Metrics, { totals, display: 'detail' }),
+      h(RequestRows, { items, display: 'detail' }));
+  }
   function Breakdown({ state, totals, turn, title, combined, retry, refresh }) {
     const summary = state.summary;
-    const [limit, setLimit] = React.useState(20);
+    const display = turn === undefined ? 'detail' : undefined;
     const items = React.useMemo(() => {
       const own = summary?.records ?? [];
-      if (turn !== undefined) return own.filter(item => item.turn === turn);
-      if (!combined) return own;
-      return [...own, ...combined.subagentRecords.map(item => ({ ...item, subagent: true }))].sort((a, b) => a.time - b.time);
-    }, [summary, turn, combined]);
+      return turn === undefined ? own : own.filter(item => item.turn === turn);
+    }, [summary, turn]);
     const row = turn === undefined ? null : summary?.turns.find(item => item.turn === turn);
     const warnings = [...new Set(turn === undefined ? combined?.warnings ?? summary?.warnings ?? [] : row?.warnings ?? [])];
     const sources = React.useMemo(() => {
       const unique = new Map();
-      for (const item of items) {
+      for (const item of combined ? [...items, ...combined.subagentRecords] : items) {
         const price = item.quote?.price;
         if (price) unique.set(`${sourceText(price.source)}|${price.sourceUrl || ''}`, price);
       }
       return [...unique.values()];
-    }, [items]);
+    }, [items, combined]);
     return h('div', { className: 'dsh-tc-panel' },
       h('div', { className: 'dsh-tc-heading' }, h('strong', null, title),
-        h('span', null, amountText(totals))),
+        turn === undefined ? h(UsageAmounts, { totals }) : h('span', null, amountText(totals))),
       h('p', { className: 'dsh-tc-note' }, '公开价估算，不等于账户实扣。双币为同一笔费用，请勿相加。'),
-      state.error && h('p', { className: 'dsh-tc-error' }, `费用读取失败：${state.error}`),
-      !totals && h('p', { className: 'dsh-tc-note' }, '本轮暂无用量记录；缺失金额和 Token 显示为 —。'),
+      state.error && h('p', { className: 'dsh-tc-error', role: 'status' }, `费用读取失败：${state.error}`),
+      turn === undefined && !state.connected && h('p', { className: 'dsh-tc-note' }, '连接恢复后自动更新'),
+      turn !== undefined && !totals && h('p', { className: 'dsh-tc-note' }, '本轮暂无用量记录；缺失金额和 Token 显示为 —。'),
+      combined && h('div', { className: 'dsh-tc-scopes' },
+        h(UsageScope, { title: '本对话消耗', totals: summary.totals, items }),
+        h(UsageScope, { title: '子智能体消耗', totals: combined.subagentTotals, items: combined.subagentRecords })),
       combined?.incomplete && h('p', { className: 'dsh-tc-warning' }, '部分会话或用量不可用，合计仅含已记录的请求。'),
       totals?.unknown > 0 && h('p', { className: 'dsh-tc-warning' }, `${totals.unknown} 次请求未计价，金额仅含已知部分。`),
       totals?.fxMissing > 0 && h('p', { className: 'dsh-tc-warning' }, `${totals.fxMissing} 次请求缺汇率，折算不完整。`),
-      h(Metrics, { totals }),
+      combined ? h('details', { className: 'dsh-tc-section' },
+        h('summary', null, h(Chevron), '合计用量与原币小计'),
+        h(Metrics, { totals, display })) : h(Metrics, { totals, display }),
       h('details', { className: 'dsh-tc-section' },
         h('summary', null, h(Chevron), '来源与计价说明', warnings.length > 0 && h('span', { className: 'dsh-tc-note' }, `${warnings.length} 条提示`)),
         h('div', { className: 'dsh-tc-sources' },
@@ -416,10 +445,9 @@ function createClientPlugin(React, styles = '', ReactDOM) {
           h('p', { className: 'dsh-tc-note' }, `共 ${formatCount(totals?.estimated)} 次估算请求。原币小计按价目币种累计；渠道实扣币种以账单为准。`),
           h('p', { className: 'dsh-tc-note' }, '各请求保留当时的价格与汇率快照；更新价目不会改写已计价记录。')),
         warnings.length > 0 && h('ul', { className: 'dsh-tc-warnings' }, warnings.map((text, i) => h('li', { key: i }, String(text))))),
-      items.length > 0 && h('details', { className: 'dsh-tc-section dsh-tc-records' },
+      !combined && items.length > 0 && h('details', { className: 'dsh-tc-section dsh-tc-records' },
         h('summary', null, h(Chevron), `请求明细 · ${items.length}`),
-        items.slice(0, limit).map((item, index) => h(RequestRow, { key: item.id ?? index, item })),
-        items.length > limit && h('button', { type: 'button', className: 'dsh-tc-action', onClick: () => setLimit(value => value + 50) }, `显示更多（还有 ${items.length - limit} 条）`)),
+        h(RequestRows, { items, display })),
       h('div', { className: 'dsh-tc-footer' },
         h('button', { type: 'button', className: 'dsh-tc-action', disabled: state.loading || !state.connected, onClick: retry }, state.error ? '重试' : '刷新费用'),
         h('button', { type: 'button', className: 'dsh-tc-action', disabled: state.loading || !state.connected, onClick: refresh }, '更新价格与汇率'),
@@ -431,11 +459,11 @@ function createClientPlugin(React, styles = '', ReactDOM) {
     const triggerRef = React.useRef(null);
     const popoverRef = React.useRef(null);
     const popoverId = React.useId();
-    const twoTotals = turn === undefined && !!state.summary?.includingSubagents;
-    const label = turn !== undefined ? '本轮估算' : combined ? '总消耗（含子智能体）' : twoTotals ? '本会话消耗' : '会话累计';
-    const detailTitle = turn !== undefined ? `第 ${turn} 轮费用` : twoTotals ? label : '会话费用';
-    const tokenCount = twoTotals ? reportedTokens(totals) : null;
-    const headline = `${label} ${amountText(totals)}${tokenCount === null ? '' : ` · ${formatCount(tokenCount)} Token`}`;
+    const label = turn !== undefined ? '本轮估算' : combined ? '总消耗（含子智能体）' : '会话累计';
+    const detailTitle = turn !== undefined ? `第 ${turn} 轮费用` : combined ? label : '会话费用';
+    const tokenCount = turn === undefined ? reportedTokens(totals) : null;
+    const tokens = tokenCount === null ? '' : ` · ${(tokenCount / 1_000_000).toLocaleString('zh-CN', TWO_DECIMALS)}M Token`;
+    const headline = `${label} ${amountText(totals, turn === undefined ? 'compact' : undefined)}${tokens}`;
     const close = () => {
       const popover = popoverRef.current;
       if (popover?.matches(':popover-open')) popover.hidePopover();
@@ -508,6 +536,7 @@ function createClientPlugin(React, styles = '', ReactDOM) {
         style: position ? { left: position.left, top: position.top, width: position.width, maxHeight: position.maxHeight, transform: position.transform } : undefined,
         onKeyDown: escape,
         onToggle: event => {
+          if (event.target !== event.currentTarget) return;
           const expanded = (event.newState ?? event.nativeEvent?.newState) === 'open';
           setOpen(expanded);
           if (!expanded && event.currentTarget.contains(event.currentTarget.ownerDocument.activeElement)) {
@@ -515,10 +544,7 @@ function createClientPlugin(React, styles = '', ReactDOM) {
           }
         },
       }, open && h(Breakdown, { state, totals, turn, title: detailTitle, combined, retry, refresh })),
-      state.error && turn === undefined && !combined && h('div', { className: 'dsh-tc-error-row', role: 'status' },
-        h('span', null, `费用读取失败：${state.error}`),
-        h('button', { type: 'button', className: 'dsh-tc-action', disabled: state.loading || !state.connected, onClick: retry }, '重试')),
-      !state.connected && h('span', { className: 'dsh-tc-note' }, '连接恢复后自动更新'));
+      turn !== undefined && !state.connected && h('span', { className: 'dsh-tc-note' }, '连接恢复后自动更新'));
   }
   function TurnPlacement({ children }) {
     const anchor = React.useRef(null);
@@ -558,11 +584,9 @@ function createClientPlugin(React, styles = '', ReactDOM) {
         const running = useSession(snapshot => snapshot.running);
         const state = useCost(sessionId, running);
         if (!sessionId) return null;
-        const actions = { state, retry: () => store.retry(sessionId), refresh: () => store.refresh(sessionId) };
         const combined = state.summary?.includingSubagents;
-        return h('div', { key: sessionId, className: combined ? 'dsh-tc-session-totals' : 'dsh-tc-session-single' },
-          combined && h(CostChip, { ...actions, key: 'combined', totals: combined.totals, combined }),
-          h(CostChip, { ...actions, key: 'own', totals: state.summary?.totals }));
+        return h(CostChip, { key: sessionId, state, totals: combined?.totals ?? state.summary?.totals, combined,
+          retry: () => store.retry(sessionId), refresh: () => store.refresh(sessionId) });
       }
       function Styles() {
         return h('style', { 'data-dsh-token-cost-styles': '' }, styles);
@@ -574,6 +598,6 @@ function createClientPlugin(React, styles = '', ReactDOM) {
   };
 }
 
-    return createClientPlugin(require('react'), ".dsh-tc-root{box-sizing:border-box;min-width:0;max-width:100%;font:inherit;font-size:12px;line-height:1.55;color:var(--dsw-alias-label-secondary,#626875);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}\n.dsh-tc-turn{align-self:flex-start;width:100%;margin-block:2px 0}\n.dsh-tc-dock{flex:0 1 auto}\n/* The sidebar shrinks the composer without changing the viewport width. */\n.dsh-tc-dock .dsh-tc-trigger{min-width:0;flex-wrap:nowrap}\n.dsh-tc-dock .dsh-tc-label,.dsh-tc-dock .dsh-tc-badge{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal}\n.dsh-tc-dock .dsh-tc-badge{flex-basis:auto;order:0;padding-inline-start:0}\n.dsh-tc-session-single{display:contents}\n.dsh-tc-session-totals{display:flex;flex:0 1 auto;flex-wrap:wrap;align-items:baseline;column-gap:6px;min-width:0;max-width:100%}\n.dsh-tc-session-totals .dsh-tc-label{white-space:normal;overflow:visible;overflow-wrap:anywhere}\n[data-dsh-token-cost-anchor]{display:none!important}\n[data-dsh-token-cost-portal]{display:inline-flex;flex:0 1 auto;min-width:0;max-width:100%}\n[data-dsh-token-cost-portal]>.dsh-tc-turn{display:inline-flex;width:auto;align-self:auto;margin:0}\n[data-turn-tail]>[data-clock=end]:has([data-dsh-token-cost-portal]){height:auto;min-height:28px;max-width:100%;flex-wrap:wrap;row-gap:4px}\n[data-clock=end]>span:has(>[data-dsh-token-cost-portal]){max-width:100%;flex-wrap:wrap;row-gap:2px}\n[data-turn-tail]>[data-slot=\"conversation.chat.turnTail\"]:has([data-dsh-token-cost-anchor]):not(:has(.dsh-tc-root)){display:contents}\n.dsh-tc-trigger{box-sizing:border-box;display:flex;align-items:center;gap:6px;max-width:100%;width:fit-content;min-height:28px;margin:0;padding:3px 7px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#757b87);font:inherit;text-align:left;cursor:pointer;user-select:none}\n.dsh-tc-trigger:hover,.dsh-tc-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover,rgba(120,130,150,.09));color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-trigger>svg{flex:none}\n.dsh-tc-label{min-width:0;overflow-wrap:anywhere}\n.dsh-tc-badge{font-size:11px;color:var(--dsw-alias-label-tertiary,#757b87)}\n.dsh-tc-chevron{display:block;flex:none;transition:transform 120ms ease;color:var(--dsw-alias-label-tertiary,#757b87)}\n.dsh-tc-trigger[aria-expanded=true]>.dsh-tc-chevron,.dsh-tc-section[open]>summary>.dsh-tc-chevron,.dsh-tc-request[open]>summary>.dsh-tc-chevron{transform:rotate(180deg)}\n.dsh-tc-popover{position:fixed;inset:auto;left:0;top:0;box-sizing:border-box;width:384px;max-width:calc(100vw - 24px);max-height:min(420px,60vh);margin:0;padding:0;border:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18));border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-secondary,#626875);font:inherit;font-size:12px;line-height:1.55;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;box-shadow:0 12px 34px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.06);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2,#b5bac2) transparent}\n.dsh-tc-popover::backdrop{background:transparent}\n.dsh-tc-panel{box-sizing:border-box;min-width:0;padding:13px 14px}\n.dsh-tc-heading{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:4px 12px;color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-heading strong{font-weight:600}\n.dsh-tc-panel p{margin:6px 0}\n.dsh-tc-note{font-size:11px;color:var(--dsw-alias-label-tertiary,#757b87)}\n.dsh-tc-panel .dsh-tc-note{line-height:1.6}\n.dsh-tc-metrics{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:4px 12px;margin:10px 0;padding:9px 0;border-block:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18))}\n.dsh-tc-metrics dt,.dsh-tc-metrics dd{min-width:0;margin:0}\n.dsh-tc-metrics dd{text-align:right;color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-sources{font-size:11px;padding:0 2px 4px 20px}\n.dsh-tc-panel a{color:var(--dsw-alias-state-business-primary,#4264cf);text-decoration:underline;text-underline-offset:2px}\n.dsh-tc-warning,.dsh-tc-warnings{color:var(--dsw-alias-state-warning-primary,#91630d)}\n.dsh-tc-warnings{margin:8px 0;padding-inline-start:20px;font-size:11px}\n.dsh-tc-warnings li+li{margin-top:4px}\n.dsh-tc-error,.dsh-tc-error-row{color:var(--dsw-alias-state-error-primary,#bc3549)}\n.dsh-tc-error-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;padding:2px 7px;font-size:11px}\n.dsh-tc-section>summary,.dsh-tc-request>summary{display:flex;align-items:center;gap:6px;padding:6px 0;cursor:pointer;list-style:none;border-radius:4px}\n.dsh-tc-section>summary:hover,.dsh-tc-request>summary:hover{color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-section>summary>.dsh-tc-note{margin-left:auto}\n.dsh-tc-section>summary::-webkit-details-marker,.dsh-tc-request>summary::-webkit-details-marker{display:none}\n.dsh-tc-section>summary::marker,.dsh-tc-request>summary::marker{content:\"\"}\n.dsh-tc-request{border-top:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18));margin-left:20px}\n.dsh-tc-request>summary>span:first-of-type{flex:1;min-width:0}\n.dsh-tc-request-amount{flex:none;white-space:nowrap}\n.dsh-tc-request-body{padding:0 2px 5px 20px;font-size:11px}\n.dsh-tc-footer{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-top:8px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18));font-size:11px}\n.dsh-tc-footer>span{margin-left:auto;color:var(--dsw-alias-label-tertiary,#757b87)}\n.dsh-tc-action{border:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18));border-radius:6px;padding:3px 8px;background:transparent;color:inherit;font:inherit;line-height:1.6;cursor:pointer}\n.dsh-tc-action:hover:enabled{background:var(--dsw-alias-interactive-bg-hover,rgba(120,130,150,.09))}\n.dsh-tc-action:disabled{opacity:.55;cursor:default}\n.dsh-tc-root :is(summary,button,a):focus-visible,.dsh-tc-popover:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#4264cf));outline-offset:2px}\n@media(max-width:480px){.dsh-tc-trigger{flex-wrap:wrap;gap:2px 5px;padding-inline:4px;font-size:11px}.dsh-tc-badge{flex-basis:100%;order:1;padding-inline-start:19px}.dsh-tc-panel{padding:11px 12px}.dsh-tc-popover{border-radius:10px}.dsh-tc-heading{gap:3px}.dsh-tc-metrics{gap:4px 8px}.dsh-tc-request-amount{white-space:normal;text-align:right}}\n@media(prefers-reduced-motion:reduce){.dsh-tc-chevron{transition:none}}\n@media(prefers-color-scheme:dark){.dsh-tc-root{color:var(--dsw-alias-label-secondary,#b8bfca)}.dsh-tc-trigger,.dsh-tc-note,.dsh-tc-badge,.dsh-tc-chevron{color:var(--dsw-alias-label-tertiary,#9aa3b3)}.dsh-tc-popover{background:var(--dsw-alias-bg-layer-1,#24272e);color:var(--dsw-alias-label-secondary,#b8bfca)}.dsh-tc-heading,.dsh-tc-metrics dd,.dsh-tc-trigger:hover,.dsh-tc-trigger[aria-expanded=true]{color:var(--dsw-alias-label-primary,#e9edf4)}.dsh-tc-warning,.dsh-tc-warnings{color:var(--dsw-alias-state-warning-primary,#ddbc76)}.dsh-tc-error,.dsh-tc-error-row{color:var(--dsw-alias-state-error-primary,#ff8b99)}}\n", require('react-dom'));
+    return createClientPlugin(require('react'), ".dsh-tc-root{box-sizing:border-box;min-width:0;max-width:100%;font:inherit;font-size:12px;line-height:1.55;color:var(--dsw-alias-label-secondary,#626875);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}\n.dsh-tc-turn{align-self:flex-start;width:100%;margin-block:2px 0}\n.dsh-tc-dock{flex:0 1 auto}\n/* The sidebar shrinks the composer without changing the viewport width. */\n.dsh-tc-dock .dsh-tc-trigger{min-width:0;flex-wrap:nowrap}\n.dsh-tc-dock .dsh-tc-label,.dsh-tc-dock .dsh-tc-badge{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal}\n.dsh-tc-dock .dsh-tc-badge{flex-shrink:2;flex-basis:auto;order:0;padding-inline-start:0}\n[data-dsh-token-cost-anchor]{display:none!important}\n[data-dsh-token-cost-portal]{display:inline-flex;flex:0 1 auto;min-width:0;max-width:100%}\n[data-dsh-token-cost-portal]>.dsh-tc-turn{display:inline-flex;width:auto;align-self:auto;margin:0}\n[data-turn-tail]>[data-clock=end]:has([data-dsh-token-cost-portal]){height:auto;min-height:28px;max-width:100%;flex-wrap:wrap;row-gap:4px}\n[data-clock=end]>span:has(>[data-dsh-token-cost-portal]){max-width:100%;flex-wrap:wrap;row-gap:2px}\n[data-turn-tail]>[data-slot=\"conversation.chat.turnTail\"]:has([data-dsh-token-cost-anchor]):not(:has(.dsh-tc-root)){display:contents}\n.dsh-tc-trigger{box-sizing:border-box;display:flex;align-items:center;gap:6px;max-width:100%;width:fit-content;min-height:28px;margin:0;padding:3px 7px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#757b87);font:inherit;text-align:left;cursor:pointer;user-select:none}\n.dsh-tc-trigger:hover,.dsh-tc-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover,rgba(120,130,150,.09));color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-trigger>svg{flex:none}\n.dsh-tc-label{min-width:0;overflow-wrap:anywhere}\n.dsh-tc-badge{font-size:11px;color:var(--dsw-alias-label-tertiary,#757b87)}\n.dsh-tc-chevron{display:block;flex:none;transition:transform 120ms ease;color:var(--dsw-alias-label-tertiary,#757b87)}\n.dsh-tc-trigger[aria-expanded=true]>.dsh-tc-chevron,.dsh-tc-section[open]>summary>.dsh-tc-chevron,.dsh-tc-request[open]>summary>.dsh-tc-chevron{transform:rotate(180deg)}\n.dsh-tc-popover{position:fixed;inset:auto;left:0;top:0;box-sizing:border-box;width:384px;max-width:calc(100vw - 24px);max-height:min(420px,60vh);margin:0;padding:0;border:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18));border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-secondary,#626875);font:inherit;font-size:12px;line-height:1.55;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;box-shadow:0 12px 34px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.06);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2,#b5bac2) transparent}\n.dsh-tc-popover::backdrop{background:transparent}\n.dsh-tc-panel{box-sizing:border-box;min-width:0;padding:13px 14px}\n.dsh-tc-heading{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:4px 12px;color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-heading strong{font-weight:600}\n.dsh-tc-panel p{margin:6px 0}\n.dsh-tc-note{font-size:11px;color:var(--dsw-alias-label-tertiary,#757b87)}\n.dsh-tc-panel .dsh-tc-note{line-height:1.6}\n.dsh-tc-metrics{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:4px 12px;margin:10px 0;padding:9px 0;border-block:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18))}\n.dsh-tc-metrics dt,.dsh-tc-metrics dd{min-width:0;margin:0}\n.dsh-tc-metrics dd{text-align:right;color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-sources{font-size:11px;padding:0 2px 4px 20px}\n.dsh-tc-panel a{color:var(--dsw-alias-state-business-primary,#4264cf);text-decoration:underline;text-underline-offset:2px}\n.dsh-tc-warning,.dsh-tc-warnings{color:var(--dsw-alias-state-warning-primary,#91630d)}\n.dsh-tc-warnings{margin:8px 0;padding-inline-start:20px;font-size:11px}\n.dsh-tc-warnings li+li{margin-top:4px}\n.dsh-tc-error{color:var(--dsw-alias-state-error-primary,#bc3549)}\n.dsh-tc-section>summary,.dsh-tc-request>summary{display:flex;align-items:center;gap:6px;padding:6px 0;cursor:pointer;list-style:none;border-radius:4px}\n.dsh-tc-section>summary:hover,.dsh-tc-request>summary:hover{color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-section>summary>.dsh-tc-note{margin-left:auto}\n.dsh-tc-section>summary::-webkit-details-marker,.dsh-tc-request>summary::-webkit-details-marker{display:none}\n.dsh-tc-section>summary::marker,.dsh-tc-request>summary::marker{content:\"\"}\n.dsh-tc-scopes{margin-top:8px;border-top:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18))}\n.dsh-tc-scope+.dsh-tc-scope{border-top:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18))}\n.dsh-tc-scope>summary>strong{flex:none;font-weight:600;color:var(--dsw-alias-label-primary,#242934)}\n.dsh-tc-usage-amounts{display:grid;min-width:0;margin-inline-start:auto;text-align:end}\n.dsh-tc-request{border-top:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18));margin-left:20px}\n.dsh-tc-request>summary>span:first-of-type{flex:1;min-width:0}\n.dsh-tc-request-amount{flex:none;white-space:nowrap}\n.dsh-tc-request-body{padding:0 2px 5px 20px;font-size:11px}\n.dsh-tc-footer{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-top:8px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18));font-size:11px}\n.dsh-tc-footer>span{margin-left:auto;color:var(--dsw-alias-label-tertiary,#757b87)}\n.dsh-tc-action{border:1px solid var(--dsw-alias-border-l2,rgba(120,130,150,.18));border-radius:6px;padding:3px 8px;background:transparent;color:inherit;font:inherit;line-height:1.6;cursor:pointer}\n.dsh-tc-action:hover:enabled{background:var(--dsw-alias-interactive-bg-hover,rgba(120,130,150,.09))}\n.dsh-tc-action:disabled{opacity:.55;cursor:default}\n.dsh-tc-root :is(summary,button,a):focus-visible,.dsh-tc-popover:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#4264cf));outline-offset:2px}\n@media(max-width:480px){.dsh-tc-trigger{flex-wrap:wrap;gap:2px 5px;padding-inline:4px;font-size:11px}.dsh-tc-badge{flex-basis:100%;order:1;padding-inline-start:19px}.dsh-tc-panel{padding:11px 12px}.dsh-tc-popover{border-radius:10px}.dsh-tc-heading{gap:3px}.dsh-tc-metrics{gap:4px 8px}.dsh-tc-request-amount{white-space:normal;text-align:right}}\n@media(prefers-reduced-motion:reduce){.dsh-tc-chevron{transition:none}}\n@media(prefers-color-scheme:dark){.dsh-tc-root{color:var(--dsw-alias-label-secondary,#b8bfca)}.dsh-tc-trigger,.dsh-tc-note,.dsh-tc-badge,.dsh-tc-chevron{color:var(--dsw-alias-label-tertiary,#9aa3b3)}.dsh-tc-popover{background:var(--dsw-alias-bg-layer-1,#24272e);color:var(--dsw-alias-label-secondary,#b8bfca)}.dsh-tc-heading,.dsh-tc-scope>summary>strong,.dsh-tc-metrics dd,.dsh-tc-trigger:hover,.dsh-tc-trigger[aria-expanded=true]{color:var(--dsw-alias-label-primary,#e9edf4)}.dsh-tc-warning,.dsh-tc-warnings{color:var(--dsw-alias-state-warning-primary,#ddbc76)}.dsh-tc-error{color:var(--dsw-alias-state-error-primary,#ff8b99)}}\n", require('react-dom'));
   },
 });

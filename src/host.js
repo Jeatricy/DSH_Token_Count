@@ -228,6 +228,7 @@ export async function createHost(ctx, config = {}, dependencies = {}) {
     if (origin !== 'subagent' || ids.size > 1 || incomplete) {
       own.includingSubagents = {
         totals: totalRecords([...own.records, ...subagentRecords]),
+        subagentTotals: totalRecords(subagentRecords),
         subagentRecords, incomplete, warnings: unique([...own.warnings, ...subagentWarnings]),
       };
     }

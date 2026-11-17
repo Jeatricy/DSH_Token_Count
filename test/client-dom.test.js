@@ -93,7 +93,7 @@ test('real React renders formal slots, one stylesheet, shared requests and expan
   assert.equal(document.querySelectorAll('style[data-dsh-token-cost-styles]').length, 1);
   assert.equal(rpc.calls.length, 1);
   assert.match(document.querySelector('.dsh-tc-turn').textContent, /本轮估算 ¥0\.072 · \$0\.01/);
-  assert.match(document.querySelector('.dsh-tc-dock').textContent, /会话累计 ¥0\.072 · \$0\.01/);
+  assert.match(document.querySelector('.dsh-tc-dock').textContent, /会话累计 ¥0\.07 · \$0\.01 · 0\.00M Token/);
   const details = await expand(dom);
   assert.equal(details.tabIndex, -1);
   assert.equal(details.getAttribute('role'), 'dialog');
@@ -118,28 +118,39 @@ test('real React renders formal slots, one stylesheet, shared requests and expan
   assert.equal(document.activeElement, document.querySelector('.dsh-tc-dock .dsh-tc-trigger'));
 });
 
-test('the composer directly shows both totals and opens details for the selected scope', async t => {
-  const value = summary();
+test('the composer shows one rounded total and opens precise amounts and records for each scope', async t => {
+  const value = summary('session-a', { totals: totals({ usd: 1.01234567, cny: 7.289333, inputTokens: 1_000_100 }) });
   value.includingSubagents = {
-    totals: totals({ requests: 2, priced: 2, estimated: 2, usd: 0.03, cny: 0.216, inputTokens: 2000, outputTokens: 300, cacheReadTokens: 400 }),
+    totals: totals({ requests: 2, priced: 2, estimated: 2, usd: 275.5428, cny: 1836.18795,
+      inputTokens: 132_000_100, outputTokens: 680_182, cacheReadTokens: 400 }),
+    subagentTotals: totals({ usd: 274.53045433, cny: 1828.898617,
+      inputTokens: 131_000_000, outputTokens: 679_982, cacheReadTokens: 100 }),
     subagentRecords: [{ ...value.records[0], id: 'child:1', model: 'child-model' }],
     incomplete: true, warnings: ['子智能体归档暂不可读'],
   };
   const { dom, document, rpc } = await mount(t, { value });
-  const [total, own] = document.querySelectorAll('.dsh-tc-session-totals .dsh-tc-trigger');
+  const triggers = document.querySelectorAll('.dsh-tc-dock .dsh-tc-trigger');
+  assert.equal(triggers.length, 1);
   assert.equal(rpc.calls.length, 1);
-  assert.match(total.textContent, /总消耗（含子智能体） ¥0\.216 · \$0\.03 · 2,700 Token/);
-  assert.match(total.textContent, /合计不完整/);
-  assert.match(own.textContent, /本会话消耗 ¥0\.072 · \$0\.01 · 1,500 Token/);
+  assert.match(triggers[0].textContent, /总消耗（含子智能体） ¥1,836\.19 · \$275\.54 · 132\.68M Token/);
+  assert.match(triggers[0].textContent, /合计不完整/);
+  assert.equal(document.querySelector('.dsh-tc-panel'), null);
   assert.match(document.querySelector('.dsh-tc-turn .dsh-tc-trigger').textContent, /本轮估算 ¥0\.072 · \$0\.01/);
-  const totalPanel = await expand(dom, '.dsh-tc-dock:first-child');
-  assert.match(totalPanel.textContent, /输入 Token2,000/);
-  assert.match(totalPanel.textContent, /子智能体 · child-model/);
-  assert.match(totalPanel.textContent, /子智能体归档暂不可读/);
-  await React.act(async () => { total.click(); });
-  const ownPanel = await expand(dom, '.dsh-tc-dock:last-child');
-  assert.match(ownPanel.textContent, /输入 Token1,000/);
-  assert.doesNotMatch(ownPanel.textContent, /child-model|子智能体归档/);
+  const panel = await expand(dom);
+  assert.match(panel.querySelector('.dsh-tc-heading').textContent, /¥1,836\.18795 · \$275\.5428/);
+  assert.match(panel.querySelector('.dsh-tc-heading').textContent, /132,680,682 Token/);
+  const [own, subagents] = panel.querySelectorAll('.dsh-tc-scope');
+  assert.equal(own.querySelector('summary strong').textContent, '本对话消耗');
+  assert.equal(subagents.querySelector('summary strong').textContent, '子智能体消耗');
+  const scopeAmounts = scope => [...scope.querySelectorAll('.dsh-tc-usage-amounts > span')].map(span => span.textContent);
+  assert.deepEqual(scopeAmounts(own), ['¥7.289333 · $1.01234567', '1,000,600 Token']);
+  assert.deepEqual(scopeAmounts(subagents), ['¥1,828.898617 · $274.53045433', '131,680,082 Token']);
+  assert.match(own.textContent, /输入 Token1,000,100/);
+  assert.match(subagents.textContent, /输入 Token131,000,000/);
+  assert.match(own.querySelector('.dsh-tc-request').textContent, /example-model/);
+  assert.match(subagents.querySelector('.dsh-tc-request').textContent, /child-model/);
+  assert.doesNotMatch(own.textContent, /child-model/);
+  assert.match(panel.textContent, /子智能体归档暂不可读/);
 });
 
 test('actual SDK turn-tail owners select the correct numeric turn and only its request records', async t => {
@@ -274,13 +285,14 @@ test('error state offers a working retry and manual price refresh uses the same 
     if (fail) throw new Error('HTTP 503');
     return { ok: true, value: summary(payload.sessionId) };
   } });
-  const error = document.querySelector('.dsh-tc-dock .dsh-tc-error-row');
-  assert.match(error.textContent, /费用读取失败：HTTP 503/);
-  assert.equal(error.getAttribute('role'), 'status');
-  fail = false;
-  await React.act(async () => { error.querySelector('button').click(); await wait(25); });
-  assert.equal(document.querySelector('.dsh-tc-dock .dsh-tc-error-row'), null);
+  assert.match(document.querySelector('.dsh-tc-dock .dsh-tc-trigger').textContent, /读取失败/);
   const details = await expand(dom);
+  const error = details.querySelector('[role="status"]');
+  assert.match(error.textContent, /费用读取失败：HTTP 503/);
+  fail = false;
+  const retry = [...details.querySelectorAll('button')].find(button => button.textContent === '重试');
+  await React.act(async () => { retry.click(); await wait(25); });
+  assert.equal(details.querySelector('[role="status"]'), null);
   const refresh = [...details.querySelectorAll('button')].find(button => button.textContent === '更新价格与汇率');
   await React.act(async () => { refresh.click(); await wait(25); });
   assert.equal(rpc.calls.at(-1)[1], 'dsh-token-cost/refresh');

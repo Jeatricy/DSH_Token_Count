@@ -27,6 +27,8 @@ dist/*.sha256
 !dist/dsh-token-cost-1.0.4.tgz.sha256
 !dist/dsh-token-cost-1.1.0.tgz
 !dist/dsh-token-cost-1.1.0.tgz.sha256
+!dist/dsh-token-cost-1.1.1.tgz
+!dist/dsh-token-cost-1.1.1.tgz.sha256
 
 # Historical research conversion helper requires unpublished raw captures.
 scripts/seed-prices.mjs
