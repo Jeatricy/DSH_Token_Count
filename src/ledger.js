@@ -2,16 +2,16 @@ import { mkdir, readFile, writeFile, rename, readdir, unlink } from 'node:fs/pro
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { calculateNative, selectOpenRouterRates, withCurrentCacheWarnings } from './price-engine.js';
+import { COUNT_FIELDS, count, money, tokenValue, totalRecords } from './totals.js';
+
+export { emptyTotals, totalRecords } from './totals.js';
 
 const VERSION = 1;
-const TOKEN_FIELDS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'totalTokens'];
-const COUNT_FIELDS = TOKEN_FIELDS.slice(0, 4);
+const TOKEN_FIELDS = [...COUNT_FIELDS, 'reasoningTokens', 'totalTokens'];
 const HISTORY_WARNING = '历史回填按当前可用价格及参考汇率估算，未验证当时实际扣款。';
 const PUBLIC_WARNING = '所有金额均为公共价目估算，不等于账户实际扣款。';
 const MISSING_USAGE = '请求未报告可用 Token 用量；费用未计价，合计可能不完整。';
 const LIFECYCLE_WARNING = '请求生命周期不完整；不能确认完整消费，费用未计价。';
-const count = value => Number.isSafeInteger(value) && value >= 0;
-const money = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const copy = value => structuredClone(value);
 const unique = values => [...new Set(values.filter(value => typeof value === 'string' && value.length > 0))];
 const samePosition = (slot, data) => slot?.turn === data.turn && slot?.step === data.step;
@@ -111,42 +111,6 @@ function fillMissingFx(quote, time, pricingService) {
 function emptyState(sessionId, inheritedEventCount) {
   return { version: VERSION, sessionId, cursor: -1, inheritedEventCount, route: null,
     currentTurn: null, active: null, last: null, records: [], turnWarnings: {}, warnings: [] };
-}
-
-export function emptyTotals() {
-  return { usd: null, cny: null, nativeUsd: null, nativeCny: null, requests: 0, priced: 0,
-    unknown: 0, estimated: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, fxMissing: 0 };
-}
-
-function tokenValue(record, field) {
-  const usage = record.usage;
-  if (count(usage?.[field])) return usage[field];
-  if ((field === 'cacheReadTokens' || field === 'cacheWriteTokens') && count(usage?.totalTokens)
-    && usage.totalTokens === COUNT_FIELDS.reduce((sum, key) => sum + (usage[key] ?? 0), 0)) return 0;
-  return null;
-}
-
-export function totalRecords(records) {
-  const totals = emptyTotals();
-  const observed = Object.fromEntries(COUNT_FIELDS.map(field => [field, false]));
-  const add = (key, value) => { if (money(value)) totals[key] = (totals[key] ?? 0) + value; };
-  for (const record of records) {
-    totals.requests += 1;
-    for (const field of COUNT_FIELDS) {
-      const value = tokenValue(record, field);
-      if (value !== null) { totals[field] += value; observed[field] = true; }
-    }
-    const quote = record.quote;
-    if (quote?.status !== 'priced' || !money(quote.native)) { totals.unknown += 1; continue; }
-    totals.priced += 1;
-    if (quote.estimated) totals.estimated += 1;
-    add('usd', quote.usd); add('cny', quote.cny);
-    if (quote.currency === 'USD') add('nativeUsd', quote.native);
-    if (quote.currency === 'CNY') add('nativeCny', quote.native);
-    if (!money(quote.usd) || !money(quote.cny)) totals.fxMissing += 1;
-  }
-  for (const field of COUNT_FIELDS) if (records.length && !observed[field]) totals[field] = null;
-  return totals;
 }
 
 // In-process serializers cover all ledger instances importing this module. Each

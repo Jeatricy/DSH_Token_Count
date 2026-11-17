@@ -61,8 +61,10 @@ try {
     data.includingSubagents = {
       totals: totals({ usd: 275.5428, cny: 1836.18795, nativeUsd: 275.5428,
         inputTokens: 132_679_682, outputTokens: 400, cacheReadTokens: 600, requests: 2, priced: 2, estimated: 2 }),
-      subagentTotals: totals({ usd: 165.0587, cny: 1100.58515, nativeUsd: 165.0587, inputTokens: 91_654_815 }),
-      subagentRecords: [{ ...data.records[0], id: 'child-1', model: 'child-model' }],
+      // Simulate a running older host whose RPC sends child receipts but no child subtotal.
+      subagentRecords: [{ ...data.records[0], id: 'child-1', model: 'child-model',
+        usage: { ...data.records[0].usage, inputTokens: 91_654_815 },
+        quote: { ...data.records[0].quote, native: 165.0587, usd: 165.0587, cny: 1100.58515 } }],
       incomplete: true, warnings: ['子智能体归档暂不可读'],
     };
     await page.evaluate(({ value, turnOwner, factory, sdk }) => {

@@ -4,6 +4,10 @@ DeepSeek Harness **0.2.1-rc.5**、**0.2.2-rc.1** 和 **0.2.2-rc.3** 的会话用
 
 金额是依据公开价目与已报告用量计算的**估算值**；双币是同一笔费用的两种折算，不能相加。原币指价目使用的币种，不代表代理渠道一定以该币种扣款。插件统计用量，不读取账户余额或套餐剩余额度。
 
+## 1.1.3 更新
+
+- 兼容只返回子智能体请求明细的旧宿主。面板按账本规则汇总子智能体的金额、Token 和请求数，缺失的汇率折算仍显示为横线。
+
 ## 1.1.2 更新
 
 - 底部简写为「总消耗」，合计不完整、未计价和缺汇率提示显示在展开面板里。
@@ -52,7 +56,7 @@ DeepSeek Harness **0.2.1-rc.5**、**0.2.2-rc.1** 和 **0.2.2-rc.3** 的会话用
 https://github.com/Jeatricy/DSH_Token_Count
 ```
 
-本地安装时，在同一窗口填入已下载安装包的绝对路径。[下载 1.1.2 安装包](https://github.com/Jeatricy/DSH_Token_Count/releases/download/v1.1.2/dsh-token-cost-1.1.2.tgz) · [SHA-256 校验文件](https://github.com/Jeatricy/DSH_Token_Count/releases/download/v1.1.2/dsh-token-cost-1.1.2.tgz.sha256)
+本地安装时，在同一窗口填入已下载安装包的绝对路径。[下载 1.1.3 安装包](https://github.com/Jeatricy/DSH_Token_Count/releases/download/v1.1.3/dsh-token-cost-1.1.3.tgz) · [SHA-256 校验文件](https://github.com/Jeatricy/DSH_Token_Count/releases/download/v1.1.3/dsh-token-cost-1.1.3.tgz.sha256)
 
 安装并启用后刷新 Harness 页面；如管理器提示需要重启，请按提示重启。后续更新代码需重新构建和安装，不能假设修改源文件会自动更新当前 GUI。
 

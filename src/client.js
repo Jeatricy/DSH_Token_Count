@@ -1,9 +1,10 @@
-// Browser code deliberately has no runtime imports. DSH supplies its shared React.
+import { COUNT_FIELDS, totalRecords } from './totals.js';
+
+// The build inlines the shared aggregation. DSH supplies React at runtime.
 export const SUMMARY_METHOD = 'dsh-token-cost/summary';
 export const REFRESH_METHOD = 'dsh-token-cost/refresh';
 
 const AMOUNTS = ['usd', 'cny', 'nativeUsd', 'nativeCny'];
-const TOKENS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'];
 const COUNTS = ['requests', 'priced', 'unknown', 'estimated', 'fxMissing'];
 const TWO_DECIMALS = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
 const finite = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -39,7 +40,7 @@ export function popoverPosition(anchor, viewport, preferUp = false) {
 export function validateSummary(value, sessionId) {
   const validTotals = totals => record(totals)
     && COUNTS.every(key => finite(totals[key]))
-    && [...AMOUNTS, ...TOKENS].every(key => totals[key] === null || finite(totals[key]));
+    && [...AMOUNTS, ...COUNT_FIELDS].every(key => totals[key] === null || finite(totals[key]));
   const combined = value?.includingSubagents;
   if (!record(value) || value.sessionId !== sessionId || !validTotals(value.totals)
     || !Array.isArray(value.turns) || !Array.isArray(value.records)
@@ -48,6 +49,10 @@ export function validateSummary(value, sessionId) {
       || (combined.subagentTotals !== undefined && !validTotals(combined.subagentTotals))
       || !Array.isArray(combined.subagentRecords) || !Array.isArray(combined.warnings) || typeof combined.incomplete !== 'boolean'))) {
     throw new Error('费用数据格式不正确，请重试。');
+  }
+  // Older hosts send the request records without a separate subagent subtotal.
+  if (combined && combined.subagentTotals === undefined) {
+    return { ...value, includingSubagents: { ...combined, subagentTotals: totalRecords(combined.subagentRecords) } };
   }
   return value;
 }
@@ -245,7 +250,7 @@ export function amountText(totals, display) {
 }
 function reportedTokens(totals) {
   if (!totals?.requests) return null;
-  const known = TOKENS.map(key => totals[key]).filter(finite);
+  const known = COUNT_FIELDS.map(key => totals[key]).filter(finite);
   return known.length ? known.reduce((sum, value) => sum + value, 0) : null;
 }
 export function safeSourceUrl(value) {

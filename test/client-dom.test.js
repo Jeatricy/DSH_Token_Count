@@ -161,6 +161,31 @@ test('the composer shows one compact total and keeps related warnings and rounde
   assert.match(panel.textContent, /子智能体归档暂不可读/);
 });
 
+test('legacy combined responses show child subtotals from receipts and preserve missing currency conversions', async t => {
+  const value = summary();
+  value.includingSubagents = {
+    totals: totals({ cny: 1.003, nativeCny: 0.931, requests: 3, priced: 2, unknown: 1, fxMissing: 1,
+      inputTokens: 2_001_300, outputTokens: 320, cacheReadTokens: 700 }),
+    subagentRecords: [
+      { id: 'child-1', model: 'priced-child', usage: { inputTokens: 2_000_000, outputTokens: 100,
+        cacheReadTokens: 400, totalTokens: 2_000_500 },
+        quote: { status: 'priced', currency: 'CNY', native: 0.931, cny: 0.931, usd: null } },
+      { id: 'child-2', model: 'unknown-child', usage: { inputTokens: 300, outputTokens: 20 },
+        quote: { status: 'unpriced' } },
+    ],
+    incomplete: false, warnings: [],
+  };
+  const { dom } = await mount(t, { value });
+  const panel = await expand(dom);
+  const [, subagents] = panel.querySelectorAll('.dsh-tc-scope');
+  assert.deepEqual([...subagents.querySelectorAll('.dsh-tc-usage-amounts > span')].map(span => span.textContent),
+    ['¥0.931 · $—', '2,000,820 Token']);
+  assert.match(subagents.textContent, /人民币原币小计¥0\.931/);
+  assert.match(subagents.textContent, /请求 \/ 已计价2 \/ 1/);
+  assert.match(subagents.textContent, /未计价 \/ 缺汇率1 \/ 1/);
+  assert.match(subagents.textContent, /缓存读取 Token400缓存写入 Token0/);
+});
+
 test('actual SDK turn-tail owners select the correct numeric turn and only its request records', async t => {
   const owner = await captureSdkTurnOwner(7, 'step', 70);
   if (!owner) { t.skip('Optional local SDK extraction is unavailable'); return; }

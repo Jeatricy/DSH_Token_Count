@@ -11,7 +11,7 @@ const manifest = await parse(join(profile, 'package.json'));
 const packageManifest = await parse(join(installed, 'package.json'));
 assert.ok(manifest.dsh.profile.bundles.includes('dsh-token-cost'));
 assert.equal(packageManifest.version, (await parse('package.json')).version);
-const files = ['index.js', 'src/host.js', 'src/ledger.js', 'src/catalog.js', 'src/price-engine.js', 'src/pricing-service.js', 'dist/client.js'];
+const files = ['index.js', 'src/host.js', 'src/ledger.js', 'src/totals.js', 'src/catalog.js', 'src/price-engine.js', 'src/pricing-service.js', 'dist/client.js'];
 for (const file of files) assert.deepEqual(await readFile(join(installed, file)), await readFile(file));
 const currentId = process.env.DSH_SESSION_ID;
 assert.ok(currentId, 'Run from a Harness session to verify current live capture');
