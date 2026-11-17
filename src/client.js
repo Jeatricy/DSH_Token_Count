@@ -39,9 +39,12 @@ export function validateSummary(value, sessionId) {
   const validTotals = totals => record(totals)
     && COUNTS.every(key => finite(totals[key]))
     && [...AMOUNTS, ...TOKENS].every(key => totals[key] === null || finite(totals[key]));
+  const combined = value?.includingSubagents;
   if (!record(value) || value.sessionId !== sessionId || !validTotals(value.totals)
     || !Array.isArray(value.turns) || !Array.isArray(value.records)
-    || value.turns.some(turn => !record(turn) || !finite(turn.turn) || !validTotals(turn.totals))) {
+    || value.turns.some(turn => !record(turn) || !finite(turn.turn) || !validTotals(turn.totals))
+    || (combined !== undefined && (!record(combined) || !validTotals(combined.totals)
+      || !Array.isArray(combined.subagentRecords) || !Array.isArray(combined.warnings) || typeof combined.incomplete !== 'boolean'))) {
     throw new Error('费用数据格式不正确，请重试。');
   }
   return value;
@@ -239,6 +242,11 @@ export function amountText(totals) {
   const allUnknown = totals?.requests > 0 && totals?.priced === 0;
   return `${formatMoney(allUnknown ? null : totals?.cny)} · ${formatMoney(allUnknown ? null : totals?.usd, 'USD')}`;
 }
+function reportedTokens(totals) {
+  if (!totals?.requests) return null;
+  const known = TOKENS.map(key => totals[key]).filter(finite);
+  return known.length ? known.reduce((sum, value) => sum + value, 0) : null;
+}
 export function safeSourceUrl(value) {
   if (typeof value !== 'string') return null;
   try {
@@ -349,7 +357,7 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
     const quote = item.quote ?? {};
     const price = quote.price ?? {};
     return h('details', { className: 'dsh-tc-request' },
-      h('summary', null, h(Chevron), h('span', null, item.model || '未知模型'),
+      h('summary', null, h(Chevron), h('span', null, item.subagent ? `子智能体 · ${item.model || '未知模型'}` : item.model || '未知模型'),
         h('span', { className: 'dsh-tc-request-amount' }, quote.status === 'priced' ? formatMoney(quote.native, quote.currency) : '未计价')),
       h('div', { className: 'dsh-tc-request-body' },
         h('p', null, `${item.provider || '未知提供商'} · ${dateText(item.time)}`),
@@ -365,12 +373,17 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
         h('p', null, `输入 ${formatCount(item.usage?.inputTokens)} / 输出 ${formatCount(item.usage?.outputTokens)} / 缓存读取 ${formatCount(item.usage?.cacheReadTokens)} / 缓存写入 ${formatCount(item.usage?.cacheWriteTokens)} Token`),
         Array.isArray(quote.warnings) && quote.warnings.length > 0 && h('ul', { className: 'dsh-tc-warnings' }, quote.warnings.map((text, i) => h('li', { key: i }, String(text))))));
   }
-  function Breakdown({ state, totals, turn, retry, refresh }) {
+  function Breakdown({ state, totals, turn, title, combined, retry, refresh }) {
     const summary = state.summary;
     const [limit, setLimit] = React.useState(20);
-    const items = React.useMemo(() => (summary?.records ?? []).filter(item => turn === undefined || item.turn === turn), [summary, turn]);
+    const items = React.useMemo(() => {
+      const own = summary?.records ?? [];
+      if (turn !== undefined) return own.filter(item => item.turn === turn);
+      if (!combined) return own;
+      return [...own, ...combined.subagentRecords.map(item => ({ ...item, subagent: true }))].sort((a, b) => a.time - b.time);
+    }, [summary, turn, combined]);
     const row = turn === undefined ? null : summary?.turns.find(item => item.turn === turn);
-    const warnings = [...new Set(turn === undefined ? summary?.warnings ?? [] : row?.warnings ?? [])];
+    const warnings = [...new Set(turn === undefined ? combined?.warnings ?? summary?.warnings ?? [] : row?.warnings ?? [])];
     const sources = React.useMemo(() => {
       const unique = new Map();
       for (const item of items) {
@@ -380,11 +393,12 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
       return [...unique.values()];
     }, [items]);
     return h('div', { className: 'dsh-tc-panel' },
-      h('div', { className: 'dsh-tc-heading' }, h('strong', null, turn === undefined ? '会话费用' : `第 ${turn} 轮费用`),
+      h('div', { className: 'dsh-tc-heading' }, h('strong', null, title),
         h('span', null, amountText(totals))),
       h('p', { className: 'dsh-tc-note' }, '公开价估算，不等于账户实扣。双币为同一笔费用，请勿相加。'),
       state.error && h('p', { className: 'dsh-tc-error' }, `费用读取失败：${state.error}`),
       !totals && h('p', { className: 'dsh-tc-note' }, '本轮暂无用量记录；缺失金额和 Token 显示为 —。'),
+      combined?.incomplete && h('p', { className: 'dsh-tc-warning' }, '部分会话或用量不可用，合计仅含已记录的请求。'),
       totals?.unknown > 0 && h('p', { className: 'dsh-tc-warning' }, `${totals.unknown} 次请求未计价，金额仅含已知部分。`),
       totals?.fxMissing > 0 && h('p', { className: 'dsh-tc-warning' }, `${totals.fxMissing} 次请求缺汇率，折算不完整。`),
       h(Metrics, { totals }),
@@ -407,13 +421,17 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
         h('button', { type: 'button', className: 'dsh-tc-action', disabled: state.loading || !state.connected, onClick: refresh }, '更新价格与汇率'),
         h('span', { title: state.updatedAt ? dateText(state.updatedAt) : undefined }, state.loading ? '更新中' : state.updatedAt ? '已更新' : '尚未读取')));
   }
-  function CostChip({ state, totals, turn, retry, refresh }) {
+  function CostChip({ state, totals, turn, combined, retry, refresh }) {
     const [open, setOpen] = React.useState(false);
     const [position, setPosition] = React.useState(null);
     const triggerRef = React.useRef(null);
     const popoverRef = React.useRef(null);
     const popoverId = React.useId();
-    const label = turn === undefined ? '会话累计' : '本轮估算';
+    const twoTotals = turn === undefined && !!state.summary?.includingSubagents;
+    const label = turn !== undefined ? '本轮估算' : combined ? '总消耗（含子智能体）' : twoTotals ? '本会话消耗' : '会话累计';
+    const detailTitle = turn !== undefined ? `第 ${turn} 轮费用` : twoTotals ? label : '会话费用';
+    const tokenCount = twoTotals ? reportedTokens(totals) : null;
+    const headline = `${label} ${amountText(totals)}${tokenCount === null ? '' : ` · ${formatCount(tokenCount)} Token`}`;
     const close = () => {
       const popover = popoverRef.current;
       if (popover?.matches(':popover-open')) popover.hidePopover();
@@ -456,6 +474,7 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
     if (state.loading) badges.push(state.summary ? '更新中' : '读取中');
     if (!state.connected) badges.push('连接未就绪');
     if (state.error) badges.push(state.summary ? '更新失败 · 旧数据' : '读取失败');
+    if (combined?.incomplete) badges.push('合计不完整');
     if (totals?.unknown > 0) badges.push(`${totals.unknown} 次未计价`);
     if (totals?.fxMissing > 0) badges.push('折算不完整');
     if (state.summary && (!totals || totals.requests === 0)) badges.push('暂无用量');
@@ -466,7 +485,7 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
         close();
       }
     };
-    const triggerLabel = `${label} ${amountText(totals)}${badges.length ? `，${badges.join('，')}` : ''}`;
+    const triggerLabel = `${headline}${badges.length ? `，${badges.join('，')}` : ''}`;
     return h('div', { className: `dsh-tc-root ${turn === undefined ? 'dsh-tc-dock' : 'dsh-tc-turn'}` },
       h('button', {
         type: 'button', ref: triggerRef, className: 'dsh-tc-trigger',
@@ -475,12 +494,12 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
         'aria-label': triggerLabel,
         onClick: () => { if (open) close(); else setOpen(true); }, onKeyDown: escape,
       },
-      h(MoneyIcon), h('span', { className: 'dsh-tc-label' }, `${label} ${amountText(totals)}`),
+      h(MoneyIcon), h('span', { className: 'dsh-tc-label' }, headline),
       badges.length > 0 && h('span', { className: `dsh-tc-badge${state.error ? ' dsh-tc-error' : ''}` }, badges.join(' · ')),
       h(Chevron)),
       h('div', {
         id: popoverId, ref: popoverRef, popover: 'auto', className: 'dsh-tc-popover',
-        role: 'dialog', tabIndex: -1, 'aria-label': turn === undefined ? '会话费用明细' : `第 ${turn} 轮费用明细`,
+        role: 'dialog', tabIndex: -1, 'aria-label': `${detailTitle}明细`,
         'data-placement': position?.placement,
         style: position ? { left: position.left, top: position.top, width: position.width, maxHeight: position.maxHeight, transform: position.transform } : undefined,
         onKeyDown: escape,
@@ -491,8 +510,8 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
             triggerRef.current?.focus({ preventScroll: true });
           }
         },
-      }, open && h(Breakdown, { state, totals, turn, retry, refresh })),
-      state.error && turn === undefined && h('div', { className: 'dsh-tc-error-row', role: 'status' },
+      }, open && h(Breakdown, { state, totals, turn, title: detailTitle, combined, retry, refresh })),
+      state.error && turn === undefined && !combined && h('div', { className: 'dsh-tc-error-row', role: 'status' },
         h('span', null, `费用读取失败：${state.error}`),
         h('button', { type: 'button', className: 'dsh-tc-action', disabled: state.loading || !state.connected, onClick: retry }, '重试')),
       !state.connected && h('span', { className: 'dsh-tc-note' }, '连接恢复后自动更新'));
@@ -535,7 +554,11 @@ export function createClientPlugin(React, styles = '', ReactDOM) {
         const running = useSession(snapshot => snapshot.running);
         const state = useCost(sessionId, running);
         if (!sessionId) return null;
-        return h(CostChip, { key: sessionId, state, totals: state.summary?.totals, retry: () => store.retry(sessionId), refresh: () => store.refresh(sessionId) });
+        const actions = { state, retry: () => store.retry(sessionId), refresh: () => store.refresh(sessionId) };
+        const combined = state.summary?.includingSubagents;
+        return h('div', { key: sessionId, className: combined ? 'dsh-tc-session-totals' : 'dsh-tc-session-single' },
+          combined && h(CostChip, { ...actions, key: 'combined', totals: combined.totals, combined }),
+          h(CostChip, { ...actions, key: 'own', totals: state.summary?.totals }));
       }
       function Styles() {
         return h('style', { 'data-dsh-token-cost-styles': '' }, styles);

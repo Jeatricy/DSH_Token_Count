@@ -21,8 +21,8 @@ function context(sessions = [], persistence) {
     emit(name, ...args) { return [...(handlers.get(name) ?? [])].map(listener => listener(...args)); },
   };
 }
-function liveSession(id, events = [], inheritedEventCount = 0) {
-  return { id, events, inheritedEventCount, snapshotEvents: from => events.filter(event => event.seq >= from) };
+function liveSession(id, events = [], inheritedEventCount = 0, meta = {}) {
+  return { id, header: { id, ...meta }, events, inheritedEventCount, snapshotEvents: from => events.filter(event => event.seq >= from) };
 }
 async function directory(t) {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-token-cost-host-test-'));
@@ -39,8 +39,8 @@ async function start(t, ctx, dependencies = {}) {
   t.after(() => host.dispose());
   return { host, pricing: pricingService, dataDir };
 }
-function finished() {
-  const f = fixture(); f.start(); f.header(); f.message(); f.end(); return f;
+function finished(tokens = usage()) {
+  const f = fixture(); f.start(); f.header(); f.message({ tokens }); f.end(); return f;
 }
 
 test('startup sweeps existing sessions and historical replay stays idempotent', async t => {
@@ -95,6 +95,80 @@ test('archive path opens read only, passes inheritance and closes the handle', a
   const s = await host.summary('archive-fork');
   assert.equal(s.totals.requests, 1); assert.equal(s.records[0].turn, 2);
   assert.deepEqual(calls, [['open', 'archive-fork', 'read'], ['read', 0, Number.MAX_SAFE_INTEGER], ['close']]);
+});
+
+test('combined totals count live and archived descendants once and leave own turns scoped to their session', async t => {
+  const root = finished(usage(100, 25, 50));
+  root.add('subagent/catalog', { childId: 'live-child', mode: 'continuable' });
+  root.add('subagent/catalog', { childId: 'archive-child', mode: 'one-shot' });
+  const archived = finished(usage(99, 21));
+  archived.add('subagent/catalog', { childId: 'inherited-only', mode: 'continuable' });
+  const inheritedEventCount = archived.events.length;
+  archived.add('session/end-seed', { inherited: true });
+  archived.start(2); archived.message({ turn: 2, tokens: usage(20, 4) }); archived.end(2);
+  archived.add('subagent/catalog', { childId: 'grandchild', mode: 'one-shot' });
+  const rootSession = liveSession('root', root.events);
+  const children = [
+    liveSession('archive-child', archived.events, inheritedEventCount, { parentSession: 'root', origin: 'subagent' }),
+    liveSession('grandchild', finished(usage(3, 2)).events, 0, { parentSession: 'archive-child', origin: 'subagent' }),
+  ];
+  const byId = new Map([rootSession, ...children].map(session => [session.id, session]));
+  const opened = [];
+  const persistence = { async open(id, access) {
+    assert.equal(access, 'read');
+    opened.push(id);
+    const session = byId.get(id);
+    assert.ok(session, `unexpected archive ${id}`);
+    return { header: session.header, inheritedEventCount: session.inheritedEventCount,
+      async read() { return { events: session.events }; }, async close() {} };
+  } };
+  const ctx = context([
+    rootSession,
+    liveSession('live-child', finished(usage(30, 5)).events, 0, { parentSession: 'root', origin: 'subagent' }),
+    liveSession('uncatalogued-live-child', finished(usage(5, 1)).events, 0, { parentSession: 'root', origin: 'subagent' }),
+    liveSession('ordinary-fork', finished(usage(1000, 100)).events, 0, { parentSession: 'root' }),
+  ], persistence);
+  const { host } = await start(t, ctx);
+  const first = await host.summary('root');
+  assert.deepEqual(opened, ['archive-child', 'grandchild']);
+  assert.equal(first.records.length, 1);
+  assert.equal(first.turns[0].totals.inputTokens, 100);
+  assert.equal(first.totals.inputTokens, 100);
+  assert.equal(first.includingSubagents.incomplete, false);
+  assert.equal(first.includingSubagents.totals.requests, 5);
+  assert.equal(first.includingSubagents.totals.inputTokens, 158);
+  assert.equal(first.includingSubagents.totals.outputTokens, 37);
+  assert.equal(first.includingSubagents.totals.cacheReadTokens, 50);
+  assert.ok(Math.abs(first.includingSubagents.totals.usd - 0.000622) < 1e-12);
+  assert.equal(first.includingSubagents.subagentRecords.length, 4);
+  ctx.live.delete('root');
+  assert.deepEqual((await host.summary('root')).includingSubagents, first.includingSubagents);
+  assert.equal((await host.summary('grandchild')).includingSubagents, undefined);
+});
+
+test('combined refresh includes child receipts and marks unavailable child usage as incomplete', async t => {
+  const root = finished();
+  root.add('subagent/catalog', { childId: 'child', mode: 'continuable' });
+  root.add('subagent/catalog', { childId: 'external-child', mode: 'external' });
+  const child = liveSession('child', finished().events, 0, { parentSession: 'root', origin: 'subagent' });
+  const ctx = context([liveSession('root', root.events), child, liveSession('unrelated', finished().events)], {
+    async open(id) { assert.equal(id, 'child'); throw new Error('Archive unavailable'); },
+  });
+  const pricing = new FakePricing(); pricing.unknown.add('model-a');
+  const { host } = await start(t, ctx, { pricingService: pricing });
+  await host.flush();
+  ctx.live.delete('child');
+  const before = await host.summary('root');
+  assert.equal(before.includingSubagents.totals.unknown, 2);
+  assert.equal(before.includingSubagents.incomplete, true);
+  assert.match(before.includingSubagents.warnings.join(' '), /子智能体的会话.*暂不可读/);
+  assert.match(before.includingSubagents.warnings.join(' '), /外部子智能体/);
+  assert.doesNotMatch(before.warnings.join(' '), /子智能体/);
+  pricing.unknown.clear();
+  const after = await host.refresh('root');
+  assert.equal(after.totals.priced, 1);
+  assert.equal(after.includingSubagents.totals.priced, 2);
+  assert.equal((await host.ledger.summary('unrelated')).totals.unknown, 1);
 });
 
 test('read-only archive handles close on failure and sessionQuery observations dispose', async () => {

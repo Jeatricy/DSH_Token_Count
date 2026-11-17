@@ -118,6 +118,30 @@ test('real React renders formal slots, one stylesheet, shared requests and expan
   assert.equal(document.activeElement, document.querySelector('.dsh-tc-dock .dsh-tc-trigger'));
 });
 
+test('the composer directly shows both totals and opens details for the selected scope', async t => {
+  const value = summary();
+  value.includingSubagents = {
+    totals: totals({ requests: 2, priced: 2, estimated: 2, usd: 0.03, cny: 0.216, inputTokens: 2000, outputTokens: 300, cacheReadTokens: 400 }),
+    subagentRecords: [{ ...value.records[0], id: 'child:1', model: 'child-model' }],
+    incomplete: true, warnings: ['子智能体归档暂不可读'],
+  };
+  const { dom, document, rpc } = await mount(t, { value });
+  const [total, own] = document.querySelectorAll('.dsh-tc-session-totals .dsh-tc-trigger');
+  assert.equal(rpc.calls.length, 1);
+  assert.match(total.textContent, /总消耗（含子智能体） ¥0\.216 · \$0\.03 · 2,700 Token/);
+  assert.match(total.textContent, /合计不完整/);
+  assert.match(own.textContent, /本会话消耗 ¥0\.072 · \$0\.01 · 1,500 Token/);
+  assert.match(document.querySelector('.dsh-tc-turn .dsh-tc-trigger').textContent, /本轮估算 ¥0\.072 · \$0\.01/);
+  const totalPanel = await expand(dom, '.dsh-tc-dock:first-child');
+  assert.match(totalPanel.textContent, /输入 Token2,000/);
+  assert.match(totalPanel.textContent, /子智能体 · child-model/);
+  assert.match(totalPanel.textContent, /子智能体归档暂不可读/);
+  await React.act(async () => { total.click(); });
+  const ownPanel = await expand(dom, '.dsh-tc-dock:last-child');
+  assert.match(ownPanel.textContent, /输入 Token1,000/);
+  assert.doesNotMatch(ownPanel.textContent, /child-model|子智能体归档/);
+});
+
 test('actual SDK turn-tail owners select the correct numeric turn and only its request records', async t => {
   const owner = await captureSdkTurnOwner(7, 'step', 70);
   if (!owner) { t.skip('Optional local SDK extraction is unavailable'); return; }

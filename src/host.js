@@ -1,10 +1,14 @@
 import { homedir } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { CostLedger, projectEvent } from './ledger.js';
+import { CostLedger, projectEvent, totalRecords } from './ledger.js';
 import { PricingService } from './pricing-service.js';
 
 const unique = values => [...new Set(values)];
+const validId = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 512;
+const READ_WARNING = '原会话暂无法只读回填；当前仅显示已保存的费用账本，合计可能不完整。';
+const SUBAGENT_READ_WARNING = '部分子智能体的会话或费用记录暂不可读，合计可能不完整。';
+const EXTERNAL_SUBAGENT_WARNING = '外部子智能体的用量未写入 Harness 会话，合计仅含已记录的用量。';
 const optional = (ctx, name) => {
   try { return ctx.get?.(name) ?? ctx[name]; } catch { return undefined; }
 };
@@ -43,7 +47,7 @@ export async function readArchivedSession(ctx, sessionId, signal) {
       if (!Number.isSafeInteger(handle.inheritedEventCount) || handle.inheritedEventCount < 0) {
         throw new Error('Archive does not expose its inherited event count');
       }
-      return { events: result.events, inheritedEventCount: handle.inheritedEventCount };
+      return { header: handle.header, events: result.events, inheritedEventCount: handle.inheritedEventCount };
     } finally { await handle.close(); }
   }
   const query = optional(ctx, 'sessionQuery');
@@ -53,7 +57,7 @@ export async function readArchivedSession(ctx, sessionId, signal) {
       if (!Number.isSafeInteger(observation.inheritedEventCount) || observation.inheritedEventCount < 0) {
         throw new Error('Archive does not expose its inherited event count');
       }
-      return { events: [...observation.events], inheritedEventCount: observation.inheritedEventCount };
+      return { header: observation.header, events: [...observation.events], inheritedEventCount: observation.inheritedEventCount };
     } finally {
       if (typeof observation[Symbol.dispose] === 'function') observation[Symbol.dispose]();
       else if (typeof observation[Symbol.asyncDispose] === 'function') await observation[Symbol.asyncDispose]();
@@ -138,43 +142,109 @@ export async function createHost(ctx, config = {}, dependencies = {}) {
   const interval = setInterval(refreshInBackground, 60 * 60 * 1000);
   interval.unref?.();
 
-  const host = {
-    dataDir, ledger, pricingService,
-    async summary(sessionId, signal) {
+  async function backfill(sessionId, childIds, signal) {
+    signal?.throwIfAborted();
+    const live = ctx.sessions.get(sessionId);
+    let header = live?.header;
+    let external = false;
+    try {
+      const { events, inheritedEventCount, header: sourceHeader } = live
+        ? { events: live.snapshotEvents(0), inheritedEventCount: live.inheritedEventCount, header }
+        : await readArchivedSession(ctx, sessionId, signal);
+      header = sourceHeader;
+      if (!Number.isSafeInteger(inheritedEventCount) || inheritedEventCount < 0) {
+        throw new Error('Invalid inherited event count');
+      }
+      // The parent catalog records children that have already left the live store.
+      // Seeded catalogs describe the source session's children.
+      for (const { type, seq, data } of events) {
+        if (type !== 'subagent/catalog' || seq < inheritedEventCount || !validId(data?.childId)) continue;
+        if (data.mode === 'external') external = true;
+        else childIds.add(data.childId);
+      }
+      // Replaying the events heals pending or failed ledger writes. The ledger
+      // cursor makes subsequent reads idempotent.
+      await queue(() => {
+        signal?.throwIfAborted();
+        return ledger.ingest(sessionId, events, { inheritedEventCount, historical: true });
+      });
+      return { header, external, unreadable: false };
+    } catch {
       signal?.throwIfAborted();
-      await ready;
-      await pending;
-      const readWarnings = [];
-      const live = ctx.sessions.get(sessionId);
+      return { header, external, unreadable: true };
+    }
+  }
+
+  async function summarize(sessionId, signal, reprice = false) {
+    signal?.throwIfAborted();
+    await ready;
+    await pending;
+
+    // Live headers cover children whose catalog entry is still being committed.
+    const childrenByParent = new Map();
+    for (const session of ctx.sessions.list()) {
+      const { origin, parentSession } = session.header ?? {};
+      if (origin !== 'subagent' || !validId(parentSession)) continue;
+      const children = childrenByParent.get(parentSession) ?? new Set();
+      children.add(session.id);
+      childrenByParent.set(parentSession, children);
+    }
+
+    const ids = new Set([sessionId]);
+    const subagentRecords = [];
+    const subagentWarnings = new Set();
+    let own;
+    let origin;
+    let incomplete = false;
+    for (const id of ids) {
+      const isRoot = id === sessionId;
+      const children = childrenByParent.get(id) ?? new Set();
+      const source = await backfill(id, children, signal);
+      for (const child of children) ids.add(child);
+      if (source.external) subagentWarnings.add(EXTERNAL_SUBAGENT_WARNING);
+      if (!isRoot && source.unreadable) subagentWarnings.add(SUBAGENT_READ_WARNING);
+      incomplete ||= source.unreadable || source.external;
       try {
-        if (live) {
-          // Full replay is intentional: it heals a failed asynchronous write and
-          // persisted seq cursors make repeat reads/HMR idempotent.
-          await queue(() => ledger.ingest(sessionId, live.snapshotEvents(0), {
-            inheritedEventCount: live.inheritedEventCount, historical: true,
-          }));
+        signal?.throwIfAborted();
+        if (reprice) await queue(() => ledger.repriceUnknown(id));
+        const summary = await ledger.summary(id);
+        if (isRoot) {
+          origin = source.header?.origin;
+          own = summary;
+          if (source.unreadable) own.warnings.push(READ_WARNING);
         } else {
-          const archive = await readArchivedSession(ctx, sessionId, signal);
-          await queue(() => ledger.ingest(sessionId, archive.events, { inheritedEventCount: archive.inheritedEventCount, historical: true }));
+          for (const record of summary.records) subagentRecords.push(record);
+          for (const warning of summary.warnings) subagentWarnings.add(warning);
         }
       } catch (error) {
         signal?.throwIfAborted();
-        readWarnings.push('原会话暂无法只读回填；当前仅显示已保存的费用账本，合计可能不完整。');
+        if (isRoot) throw error;
+        subagentWarnings.add(SUBAGENT_READ_WARNING);
+        incomplete = true;
       }
-      signal?.throwIfAborted();
-      const summary = await ledger.summary(sessionId);
-      summary.warnings = unique([...summary.warnings, ...warnings, ...readWarnings]);
-      return summary;
-    },
+    }
+    signal?.throwIfAborted();
+    own.warnings = unique([...own.warnings, ...warnings]);
+    if (origin !== 'subagent' || ids.size > 1 || incomplete) {
+      own.includingSubagents = {
+        totals: totalRecords([...own.records, ...subagentRecords]),
+        subagentRecords, incomplete, warnings: unique([...own.warnings, ...subagentWarnings]),
+      };
+    }
+    return own;
+  }
+
+  const host = {
+    dataDir, ledger, pricingService,
+    summary: summarize,
     async refresh(sessionId, signal) {
       signal?.throwIfAborted();
       await ready;
       try { await pricingService.refresh(true); }
       catch { warn('价格或汇率同步失败；已保存的费用快照保持不变。'); }
       signal?.throwIfAborted();
-      if (sessionId !== undefined) await host.summary(sessionId, signal);
-      await queue(() => ledger.repriceUnknown(sessionId));
-      if (sessionId !== undefined) return host.summary(sessionId, signal);
+      if (sessionId !== undefined) return summarize(sessionId, signal, true);
+      await queue(() => ledger.repriceUnknown());
       const status = pricingService.getStatus();
       return { ...status, warnings: unique([...(status.warnings ?? []), ...warnings]) };
     },
@@ -195,7 +265,6 @@ export async function createHost(ctx, config = {}, dependencies = {}) {
 }
 
 const failure = (code, message) => ({ ok: false, error: { code, message, details: {} } });
-const validId = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 512;
 
 export function createRpcHandler(host) {
   return async (endpoint, payload, signal, peer) => {
