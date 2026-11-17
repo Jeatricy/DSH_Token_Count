@@ -236,16 +236,9 @@ function formatMoney(value, currency = 'CNY', display) {
   const symbol = currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : `${currency} `;
   if (!finite(value)) return `${symbol}—`;
   if (display === 'compact') return symbol + value.toLocaleString('zh-CN', TWO_DECIMALS);
-  if (display === 'detail') {
-    // Very small amounts can need more than 20 fractional digits.
-    if (value > 0 && value < 0.0001) return symbol + String(value);
-    return symbol + value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 20 });
-  }
   if (value > 0 && value < 0.000001) return `${symbol}<0.000001`;
-  return symbol + value.toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: value < 0.01 ? 6 : value < 1000 ? 4 : 2,
-  });
+  const maximumFractionDigits = display !== 'detail' && value >= 1000 ? 2 : value < 0.01 ? 6 : 4;
+  return symbol + value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits });
 }
 function formatCount(value) {
   return finite(value) ? value.toLocaleString('zh-CN') : '—';
@@ -459,8 +452,8 @@ function createClientPlugin(React, styles = '', ReactDOM) {
     const triggerRef = React.useRef(null);
     const popoverRef = React.useRef(null);
     const popoverId = React.useId();
-    const label = turn !== undefined ? '本轮估算' : combined ? '总消耗（含子智能体）' : '会话累计';
-    const detailTitle = turn !== undefined ? `第 ${turn} 轮费用` : combined ? label : '会话费用';
+    const label = turn !== undefined ? '本轮估算' : combined ? '总消耗' : '会话累计';
+    const detailTitle = turn !== undefined ? `第 ${turn} 轮费用` : combined ? '总消耗（含子智能体）' : '会话费用';
     const tokenCount = turn === undefined ? reportedTokens(totals) : null;
     const tokens = tokenCount === null ? '' : ` · ${(tokenCount / 1_000_000).toLocaleString('zh-CN', TWO_DECIMALS)}M Token`;
     const headline = `${label} ${amountText(totals, turn === undefined ? 'compact' : undefined)}${tokens}`;
@@ -506,9 +499,10 @@ function createClientPlugin(React, styles = '', ReactDOM) {
     if (state.loading) badges.push(state.summary ? '更新中' : '读取中');
     if (!state.connected) badges.push('连接未就绪');
     if (state.error) badges.push(state.summary ? '更新失败 · 旧数据' : '读取失败');
-    if (combined?.incomplete) badges.push('合计不完整');
-    if (totals?.unknown > 0) badges.push(`${totals.unknown} 次未计价`);
-    if (totals?.fxMissing > 0) badges.push('折算不完整');
+    if (turn !== undefined) {
+      if (totals?.unknown > 0) badges.push(`${totals.unknown} 次未计价`);
+      if (totals?.fxMissing > 0) badges.push('折算不完整');
+    }
     if (state.summary && (!totals || totals.requests === 0)) badges.push('暂无用量');
     const escape = event => {
       if (event.key === 'Escape' && open) {

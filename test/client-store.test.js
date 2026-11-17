@@ -45,7 +45,8 @@ test('missing and tiny money cannot appear as zero; both conversions are kept se
   assert.equal(amountText(totals()), '¥0.072 · $0.01');
   assert.equal(amountText(totals({ requests: 2, priced: 0, unknown: 2, cny: 0, usd: 0 })), '¥— · $—');
   assert.equal(amountText(totals({ cny: 1836.18795, usd: null }), 'compact'), '¥1,836.19 · $—');
-  assert.equal(amountText(totals({ cny: 1836.18795, usd: 0.0000001 }), 'detail'), '¥1,836.18795 · $1e-7');
+  assert.equal(amountText(totals({ cny: 1836.18795, usd: 0.0000001 }), 'detail'), '¥1,836.188 · $<0.000001');
+  assert.equal(amountText(totals({ cny: 1.01234567, usd: 0.0001234567 }), 'detail'), '¥1.0123 · $0.000123');
   assert.equal(formatCount(null), '—');
   assert.equal(safeSourceUrl('javascript:alert(1)'), null);
   assert.equal(safeSourceUrl('https://example.com/prices'), 'https://example.com/prices');

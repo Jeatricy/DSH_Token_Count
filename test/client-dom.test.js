@@ -118,38 +118,46 @@ test('real React renders formal slots, one stylesheet, shared requests and expan
   assert.equal(document.activeElement, document.querySelector('.dsh-tc-dock .dsh-tc-trigger'));
 });
 
-test('the composer shows one rounded total and opens precise amounts and records for each scope', async t => {
+test('the composer shows one compact total and keeps related warnings and rounded amounts inside the details', async t => {
   const value = summary('session-a', { totals: totals({ usd: 1.01234567, cny: 7.289333, inputTokens: 1_000_100 }) });
   value.includingSubagents = {
-    totals: totals({ requests: 2, priced: 2, estimated: 2, usd: 275.5428, cny: 1836.18795,
+    totals: totals({ requests: 3, priced: 2, unknown: 1, estimated: 2, usd: 275.5428, cny: 1836.18795,
       inputTokens: 132_000_100, outputTokens: 680_182, cacheReadTokens: 400 }),
-    subagentTotals: totals({ usd: 274.53045433, cny: 1828.898617,
+    subagentTotals: totals({ requests: 2, unknown: 1, usd: 274.53045433, cny: 1828.898617,
       inputTokens: 131_000_000, outputTokens: 679_982, cacheReadTokens: 100 }),
-    subagentRecords: [{ ...value.records[0], id: 'child:1', model: 'child-model' }],
+    subagentRecords: [
+      { ...value.records[0], id: 'child:1', model: 'child-model' },
+      { id: 'child:2', model: 'unknown-model', quote: { status: 'unpriced' } },
+    ],
     incomplete: true, warnings: ['子智能体归档暂不可读'],
   };
   const { dom, document, rpc } = await mount(t, { value });
   const triggers = document.querySelectorAll('.dsh-tc-dock .dsh-tc-trigger');
   assert.equal(triggers.length, 1);
   assert.equal(rpc.calls.length, 1);
-  assert.match(triggers[0].textContent, /总消耗（含子智能体） ¥1,836\.19 · \$275\.54 · 132\.68M Token/);
-  assert.match(triggers[0].textContent, /合计不完整/);
+  const headline = '总消耗 ¥1,836.19 · $275.54 · 132.68M Token';
+  assert.equal(triggers[0].textContent, headline);
+  assert.equal(triggers[0].getAttribute('aria-label'), headline);
+  assert.doesNotMatch(triggers[0].title, /含子智能体|合计不完整|未计价/);
   assert.equal(document.querySelector('.dsh-tc-panel'), null);
   assert.match(document.querySelector('.dsh-tc-turn .dsh-tc-trigger').textContent, /本轮估算 ¥0\.072 · \$0\.01/);
   const panel = await expand(dom);
-  assert.match(panel.querySelector('.dsh-tc-heading').textContent, /¥1,836\.18795 · \$275\.5428/);
+  assert.match(panel.querySelector('.dsh-tc-heading').textContent, /总消耗（含子智能体）/);
+  assert.equal(panel.querySelector('.dsh-tc-heading .dsh-tc-usage-amounts > span').textContent, '¥1,836.188 · $275.5428');
   assert.match(panel.querySelector('.dsh-tc-heading').textContent, /132,680,682 Token/);
   const [own, subagents] = panel.querySelectorAll('.dsh-tc-scope');
   assert.equal(own.querySelector('summary strong').textContent, '本对话消耗');
   assert.equal(subagents.querySelector('summary strong').textContent, '子智能体消耗');
   const scopeAmounts = scope => [...scope.querySelectorAll('.dsh-tc-usage-amounts > span')].map(span => span.textContent);
-  assert.deepEqual(scopeAmounts(own), ['¥7.289333 · $1.01234567', '1,000,600 Token']);
-  assert.deepEqual(scopeAmounts(subagents), ['¥1,828.898617 · $274.53045433', '131,680,082 Token']);
+  assert.deepEqual(scopeAmounts(own), ['¥7.2893 · $1.0123', '1,000,600 Token']);
+  assert.deepEqual(scopeAmounts(subagents), ['¥1,828.8986 · $274.5305', '131,680,082 Token']);
   assert.match(own.textContent, /输入 Token1,000,100/);
   assert.match(subagents.textContent, /输入 Token131,000,000/);
   assert.match(own.querySelector('.dsh-tc-request').textContent, /example-model/);
   assert.match(subagents.querySelector('.dsh-tc-request').textContent, /child-model/);
   assert.doesNotMatch(own.textContent, /child-model/);
+  assert.match(panel.textContent, /部分会话或用量不可用/);
+  assert.match(panel.textContent, /1 次请求未计价/);
   assert.match(panel.textContent, /子智能体归档暂不可读/);
 });
 
@@ -272,8 +280,10 @@ test('all unknown amounts and token counts stay unknown with a visible unpriced 
   const value = summary('session-a', { totals: unknown, turns: [{ turn: 1, totals: unknown, models: ['mystery'], warnings: ['未识别的模型'] }], records: [] });
   const { dom, document } = await mount(t, { value });
   assert.match(document.querySelector('.dsh-tc-dock').textContent, /会话累计 ¥— · \$—/);
-  assert.match(document.querySelector('.dsh-tc-dock').textContent, /2 次未计价/);
+  assert.doesNotMatch(document.querySelector('.dsh-tc-dock').textContent, /未计价/);
+  assert.match(document.querySelector('.dsh-tc-turn').textContent, /2 次未计价/);
   const details = await expand(dom);
+  assert.match(details.textContent, /2 次请求未计价/);
   assert.match(details.textContent, /美元原币小计\$—/);
   assert.match(details.textContent, /输入 Token—/);
   assert.doesNotMatch(details.textContent, /¥0\.00|\$0\.00/);

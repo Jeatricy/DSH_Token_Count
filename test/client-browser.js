@@ -63,7 +63,7 @@ try {
         inputTokens: 132_679_682, outputTokens: 400, cacheReadTokens: 600, requests: 2, priced: 2, estimated: 2 }),
       subagentTotals: totals({ usd: 165.0587, cny: 1100.58515, nativeUsd: 165.0587, inputTokens: 91_654_815 }),
       subagentRecords: [{ ...data.records[0], id: 'child-1', model: 'child-model' }],
-      incomplete: false, warnings: [],
+      incomplete: true, warnings: ['子智能体归档暂不可读'],
     };
     await page.evaluate(({ value, turnOwner, factory, sdk }) => {
       const React = window.sharedRequire('react'), ReactDOM = window.sharedRequire('react-dom');
@@ -139,7 +139,7 @@ try {
     }
     await page.screenshot({ path: resolve(root, `artifacts/client-toolbar-${name}.png`), fullPage: true });
     const dockTrigger = page.locator('.dsh-tc-dock .dsh-tc-trigger'), dockPopup = page.locator('.dsh-tc-dock .dsh-tc-popover');
-    const dockLabel = '总消耗（含子智能体） ¥1,836.19 · $275.54 · 132.68M Token';
+    const dockLabel = '总消耗 ¥1,836.19 · $275.54 · 132.68M Token';
     assert.equal(await dockTrigger.count(), 1);
     assert.equal(await dockTrigger.locator('.dsh-tc-label').textContent(), dockLabel);
     const before = await page.locator('.composer').boundingBox();
@@ -151,7 +151,8 @@ try {
     const scopes = dockPopup.locator('.dsh-tc-scope');
     assert.deepEqual(await scopes.locator('summary > strong').allTextContents(), ['本对话消耗', '子智能体消耗']);
     assert.match(await scopes.nth(0).locator('summary').first().innerText(), /¥735\.6028 · \$110\.4841/);
-    assert.match(await scopes.nth(1).locator('summary').first().innerText(), /¥1,100\.58515 · \$165\.0587/);
+    assert.match(await scopes.nth(1).locator('summary').first().innerText(), /¥1,100\.5852 · \$165\.0587/);
+    assert.equal(await dockPopup.getByText('部分会话或用量不可用，合计仅含已记录的请求。').isVisible(), true);
     assert.equal(await dockPopup.evaluate(panel => panel.scrollWidth > panel.clientWidth), false);
     if (name === 'light') {
       await page.screenshot({ path: resolve(root, 'artifacts/session-usage-open.png'), fullPage: true });
@@ -184,14 +185,14 @@ try {
       assert.ok(layout.triggerHeight <= 29, `Session cost grew to ${layout.triggerHeight}px`);
       assert.ok(layout.dockHeight <= 37, `Composer dock grew to ${layout.dockHeight}px`);
       assert.equal(layout.overflow, false);
-      if (composerWidth <= 360) assert.equal(layout.truncated, true);
+      if (composerWidth === 280) assert.equal(layout.truncated, true);
       if (composerWidth === 680) assert.equal(layout.truncated, false);
       if (composerWidth === 280) {
         const narrowComposer = await page.locator('.composer').boundingBox();
         await dockTrigger.focus();
         await page.keyboard.press('Enter');
         await page.waitForFunction(() => document.querySelector('.dsh-tc-dock .dsh-tc-popover').matches(':popover-open'));
-        assert.match(await dockPopup.locator('.dsh-tc-heading').innerText(), /¥1,836\.18795 · \$275\.5428/);
+        assert.match(await dockPopup.locator('.dsh-tc-heading').innerText(), /¥1,836\.188 · \$275\.5428/);
         assert.deepEqual(await page.locator('.composer').boundingBox(), narrowComposer);
         const narrowPopup = await dockPopup.boundingBox(), narrowTrigger = await dockTrigger.boundingBox();
         assert.ok(narrowPopup.y + narrowPopup.height <= narrowTrigger.y);
